@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Runtime data
+logs/
+backend/logs/
+upload_staging/
+backend/upload_staging/
+backend/graph_.png
+
+# Local environment
+.env
+backend/.env
+
+# Local tool state
+.claude/
+.codebuddy/
+.vscode/
+
+# Editor/OS
+.DS_Store
+Thumbs.db
