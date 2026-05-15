@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 # ============== 上下文融合提示词 ==============
 
 CONTEXT_FUSION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是一个问题理解和意图路由助手。根据历史对话和可引用查询结果，判断当前问题应走查询、分析还是混合路径。
+    ("system", """你是一个问题理解和意图路由助手。根据历史对话和可引用查询结果，判断当前问题应走查询、分析、混合还是澄清路径。
 
 ## 历史对话
 {conversation_history}
@@ -31,34 +31,37 @@ CONTEXT_FUSION_PROMPT = ChatPromptTemplate.from_messages([
 
 3. **ambiguous（模糊问题）**：无法确定用户意图
    - 示例："再看看"（指代不明）
-   → 降级为原始问题，置信度设为低分
+   → intent_type=clarify，并给出需要用户补充的信息
 
 ## 意图路由规则
 1. **query**：需要查询数据库才能回答，或用户明确要求查新数据。
 2. **analysis**：用户要求解释、评价、比较、总结、说明原因，且可完全基于历史查询结果回答。
 3. **hybrid**：用户同时引用历史结果，又提出新的公司、指标、期间或维度，需要先查询缺失数据再综合分析。
+4. **clarify**：问题不是数据查询、查询条件不足、引用对象不明确，或用户要求分析但没有可引用的历史查询结果。
 
 ## 历史结果引用规则
 1. `referenced_result_ids` 只能使用"可引用的历史查询结果"中出现的 id。
-2. 用户说"刚刚/上面/这个数据"时，默认引用最近且语义最相关的结果。
-3. 如果找不到可引用结果但用户要求分析历史数据，intent_type 仍为 analysis，referenced_result_ids 返回空数组。
+2. 只有用户明确说"刚才/刚刚/上面/前面/这个结果/这个数据/上述/前述"等指代历史结果时，才默认引用最近且语义最相关的结果。
+3. 如果找不到可引用结果但用户要求分析历史数据，intent_type 必须为 clarify，并在 clarification_message 中提示用户先查询相关数据。
 4. hybrid 时，`sql_question` 必须只描述需要新查的缺失数据，不要重复查询已经在历史结果里的数据。
 
 ## 融合原则（最小替换）
 1. 只消解指代词和省略，不引入新查询维度
 2. 历史来源使用用户的原始表达（original），不基于上一轮融合结果
 3. 如果检测到话题切换，判为 standalone
+4. 不要对非数据查询做开放知识回答；此类问题使用 clarify，引导用户提出可查询的数据问题
 
 ## 输出格式
 只返回一个 JSON 对象，不要包含 Markdown 代码块：
 {{
   "question_type": "standalone|continuation|ambiguous",
-  "intent_type": "query|analysis|hybrid",
+  "intent_type": "query|analysis|hybrid|clarify",
   "confidence": 0.0,
   "reasoning": "一句话说明",
   "fused_question": "完整的、可独立执行的问题",
   "sql_question": "query/hybrid 场景用于 SQL 查询的问题；analysis 时为空字符串",
-  "referenced_result_ids": ["历史结果ID"]
+  "referenced_result_ids": ["历史结果ID"],
+  "clarification_message": "clarify 场景给用户的澄清提示；其他场景为空字符串"
 }}
 """),
     ("human", "当前问题: {question}\n\n请判断问题类型并进行必要的融合。")

@@ -17,7 +17,7 @@ interface AppSideLayoutProps<K extends string = string> {
   showBackToChat?: boolean
 }
 
-const SIDEBAR_WIDTH = 220
+const SIDEBAR_WIDTH = 256
 
 export function AppSideLayout<K extends string = string>({
   tabs,

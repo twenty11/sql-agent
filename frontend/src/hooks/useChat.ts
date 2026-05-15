@@ -53,6 +53,7 @@ export function serverMsgToLocal(m: MessageOut): Message {
     sql: m.metadata?.sql ?? undefined,
     explanation: m.metadata?.explanation ?? undefined,
     result: m.metadata?.result ?? undefined,
+    queryResultId: m.metadata?.query_result_id ?? undefined,
     status,
     runId: m.metadata?.run_id ?? undefined,
     lastEventId: m.metadata?.last_event_id ?? undefined,
@@ -76,13 +77,18 @@ export function applyStreamEventToMessage(message: Message, data: any, eventId?:
     return { ...withEventId, explanation: data.content }
   }
   if (data.type === 'result') {
-    return { ...withEventId, result: data.data as QueryResult }
+    return {
+      ...withEventId,
+      result: data.data as QueryResult,
+      queryResultId: data.data?.query_result_id || withEventId.queryResultId,
+    }
   }
   if (data.type === 'done') {
     const state = data.state || {}
     return {
       ...withEventId,
       sql: state.generated_sql || withEventId.sql,
+      queryResultId: state.query_result_id || withEventId.queryResultId,
       thinking: false,
       status: 'completed',
     }

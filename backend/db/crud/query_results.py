@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
 
-from db.models import QueryResult
+from db.models import QueryResult, Session as ChatSession
 
 
 def _json_safe(obj: Any) -> Any:
@@ -40,10 +41,27 @@ def build_query_result_summary(question: str, result_data: dict | None) -> str:
     result_data = result_data or {}
     columns = result_data.get("columns") or []
     row_count = result_data.get("row_count", 0)
+    truncated = bool(result_data.get("truncated"))
     column_text = "、".join(str(c) for c in columns[:8])
     if len(columns) > 8:
         column_text += " 等"
-    return f"问题：{question}；返回 {row_count} 行；字段：{column_text or '无'}"
+    suffix = "（预览已截断）" if truncated else ""
+    return f"问题：{question}；返回 {row_count} 行{suffix}；字段：{column_text or '无'}"
+
+
+async def get_query_result_for_user(
+    db: AsyncSession,
+    result_id: str,
+    user_id: str,
+) -> QueryResult | None:
+    """Fetch a query result only if its session belongs to the current user."""
+    result = await db.execute(
+        select(QueryResult)
+        .join(ChatSession, ChatSession.id == QueryResult.session_id)
+        .where(QueryResult.id == result_id)
+        .where(ChatSession.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
 
 
 def save_query_result_sync(

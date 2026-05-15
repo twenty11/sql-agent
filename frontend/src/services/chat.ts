@@ -65,6 +65,16 @@ export const chatService = {
     await api.post('/api/query/cancel', { run_id: runId })
   },
 
+  async exportQueryResult(resultId: string): Promise<{ blob: Blob; filename: string }> {
+    const res = await api.get<Blob>(`/api/query-results/${resultId}/export`, {
+      responseType: 'blob',
+    })
+    const disposition = res.headers['content-disposition']
+    const fallback = `query_result_${resultId}.xlsx`
+    const filename = parseContentDispositionFilename(disposition) || fallback
+    return { blob: res.data, filename }
+  },
+
   async fetchUserTableGroups(): Promise<TableGroup[]> {
     const res = await api.get<TableGroup[]>('/profile/table-groups')
     return res.data
@@ -100,4 +110,19 @@ export const chatService = {
     const res = await api.post<QuickQuestion>(`/api/quick-questions/${id}/use`)
     return res.data
   },
+}
+
+function parseContentDispositionFilename(disposition?: string): string | null {
+  if (!disposition) return null
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
+    }
+  }
+  const quoted = disposition.match(/filename="([^"]+)"/i)?.[1]
+  if (quoted) return quoted
+  return disposition.match(/filename=([^;]+)/i)?.[1]?.trim() || null
 }

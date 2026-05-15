@@ -4,8 +4,13 @@ import { colors, radii, shadows } from '../../styles/tokens'
 import type { UploadBatchDetail, UploadBatchItem, UploadBatchStatus } from '../../types/admin'
 import { useAuth } from '../../contexts/AuthContext'
 import { useUploadTasks } from '../../contexts/UploadTasksContext'
+import { Tooltip } from '../ui/Tooltip'
 
 const ACTIVE_STATUSES = new Set<UploadBatchStatus>(['queued', 'processing'])
+
+function remainingUnappliedCount(totalCount: number, successCount: number) {
+  return Math.max(totalCount - successCount, 0)
+}
 
 const batchStatusLabel: Record<UploadBatchStatus, string> = {
   queued: '排队中',
@@ -49,7 +54,7 @@ export function UploadTaskDock() {
   const badgeCount = useMemo(() => {
     const batchFileCount = batches
       .filter((batch) => ACTIVE_STATUSES.has(batch.status))
-      .reduce((sum, batch) => sum + batch.total_count, 0)
+      .reduce((sum, batch) => sum + remainingUnappliedCount(batch.total_count, batch.success_count), 0)
     const localFileCount = localSubmissions
       .filter((item) => item.status === 'submitting')
       .reduce((sum, item) => sum + item.fileNames.length, 0)
@@ -235,9 +240,11 @@ function UploadItemRow({ item }: { item: UploadBatchItem }) {
       background: colors.sidebarBg,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <div title={item.file_name} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
-          {item.file_name}
-        </div>
+        <Tooltip content={item.file_name}>
+          <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+            {item.file_name}
+          </div>
+        </Tooltip>
         <span style={{ ...statusPillStyle, color: statusColor(item.status), flex: '0 0 auto' }}>
           {itemStatusLabel[item.status] || item.status}
         </span>

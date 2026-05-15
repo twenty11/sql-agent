@@ -36,6 +36,10 @@ style.textContent = `
     0%, 80%, 100% { transform: translateY(0); }
     40%           { transform: translateY(-6px); }
   }
+  @keyframes tooltipIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: scale(1); }
+  }
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }

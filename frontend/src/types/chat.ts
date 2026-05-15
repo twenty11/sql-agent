@@ -35,8 +35,11 @@ export interface QuickQuestionInput {
 
 export interface QueryResult {
   columns: string[]
-  rows: (string | number | null)[][]
+  rows: (string | number | boolean | null)[][]
   row_count: number
+  preview_row_count?: number
+  preview_limit?: number
+  truncated?: boolean
 }
 
 export type MessageRole = 'user' | 'ai'
@@ -49,6 +52,7 @@ export interface Message {
   result?: QueryResult
   sql?: string
   explanation?: string
+  queryResultId?: string
   thinking?: boolean
   status?: MessageStatus
   runId?: string
@@ -68,6 +72,7 @@ export interface MessageOut {
     result?: QueryResult
     status?: MessageStatus
     run_id?: string
+    query_result_id?: string
     started_at?: string
     finished_at?: string
     last_event_id?: string

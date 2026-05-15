@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import type { Message } from '../../types/chat'
 import { colors, radii, fontFamily } from '../../styles/tokens'
 import { BookmarkIcon } from '../Icons'
+import { Tooltip } from '../ui/Tooltip'
 
 interface UserMessageProps {
   message: Message
@@ -29,7 +30,7 @@ export function UserMessage({ message, onSaveQuickQuestion }: UserMessageProps) 
             border: `1px solid ${colors.border}`,
             borderRadius: '22px 22px 8px 22px',
             padding: '12px 16px',
-            fontSize: 14,
+            fontSize: 16,
             color: colors.textPrimary,
             lineHeight: 1.6,
             fontFamily,
@@ -40,9 +41,9 @@ export function UserMessage({ message, onSaveQuickQuestion }: UserMessageProps) 
           {message.content}
         </div>
         {onSaveQuickQuestion && (
+          <Tooltip content="收藏为快捷问题" placement="left">
           <button
             type="button"
-            title="收藏为快捷问题"
             onClick={() => onSaveQuickQuestion(message.content)}
             style={{
               position: 'absolute',
@@ -70,6 +71,7 @@ export function UserMessage({ message, onSaveQuickQuestion }: UserMessageProps) 
           >
             <BookmarkIcon width={14} height={14} color={colors.textSecondary} />
           </button>
+          </Tooltip>
         )}
       </div>
     </div>

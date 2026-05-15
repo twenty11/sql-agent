@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time as datetime_time, timezone
+from decimal import Decimal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from api.deps import get_async_session, get_current_user, get_redis
 from auth.dependencies import get_current_user_from_header_or_query, UserContext
@@ -140,6 +145,134 @@ async def resume_query_stream(
     if not run or run.get("user_id") != user.user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return _stream_response(redis, run_id, from_event_id or "0-0")
+
+
+class ExportTooLargeError(Exception):
+    """Raised when an export would exceed the configured row cap."""
+
+
+def _validate_export_sql(sql: str, allowed_tables: list[str] | None) -> None:
+    from graph.nodes import check_query_node
+
+    check = check_query_node({
+        "generated_sql": sql,
+        "allowed_tables": allowed_tables,
+        "log_context": None,
+    })
+    if not check.get("sql_valid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=check.get("sql_check_message") or "SQL is not allowed for export.",
+        )
+
+
+def _xlsx_cell_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool, datetime, date, datetime_time)):
+        return value
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
+
+
+def _write_sql_export_xlsx_sync(sql: str, result_id: str) -> tuple[Path, int]:
+    from db.connection import get_engine
+    from openpyxl import Workbook
+
+    settings = get_settings()
+    chunk_size = max(1, int(settings.export_chunk_size or 2000))
+    max_rows = max(1, int(settings.export_max_rows or 1048575))
+    timeout_ms = max(1, int(settings.export_statement_timeout_ms or 300000))
+
+    temp = tempfile.NamedTemporaryFile(
+        prefix=f"query_result_{result_id}_",
+        suffix=".xlsx",
+        delete=False,
+    )
+    temp_path = Path(temp.name)
+    temp.close()
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("查询结果")
+    row_count = 0
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('statement_timeout', :timeout_value, true)"),
+                {"timeout_value": f"{timeout_ms}ms"},
+            )
+            stream_conn = conn.execution_options(stream_results=True)
+            result = stream_conn.execute(text(sql))
+            ws.append([str(column) for column in result.keys()])
+
+            while True:
+                rows = result.fetchmany(chunk_size)
+                if not rows:
+                    break
+                if row_count + len(rows) > max_rows:
+                    raise ExportTooLargeError(
+                        f"导出结果超过 {max_rows} 行，请缩小查询范围后重试。"
+                    )
+                for row in rows:
+                    ws.append([_xlsx_cell_value(cell) for cell in row])
+                row_count += len(rows)
+
+        wb.save(temp_path)
+        return temp_path, row_count
+    except Exception:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        try:
+            wb.close()
+        except Exception:
+            pass
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+@router.get("/api/query-results/{result_id}/export")
+async def export_query_result(
+    result_id: str,
+    user: UserContext = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    from db.crud.query_results import get_query_result_for_user
+
+    result = await get_query_result_for_user(db, result_id, user.user_id)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Query result not found")
+    if not result.sql:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query result has no SQL to export")
+
+    redis = get_redis()
+    allowed_tables = await get_user_allowed_tables(user.user_id, redis, db)
+    if allowed_tables == []:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No data table access")
+    _validate_export_sql(result.sql, allowed_tables)
+
+    try:
+        file_path, _row_count = await asyncio.to_thread(
+            _write_sql_export_xlsx_sync,
+            result.sql,
+            result_id,
+        )
+    except ExportTooLargeError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+
+    return FileResponse(
+        file_path,
+        filename=f"query_result_{result_id}.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        background=BackgroundTask(lambda: file_path.unlink(missing_ok=True)),
+    )
 
 
 @router.get("/api/query")

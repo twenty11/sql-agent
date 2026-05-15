@@ -249,12 +249,13 @@ export function CustomSelect({
 }
 
 export function Modal({
-  title, onClose, children, maxWidth = 400,
+  title, onClose, children, maxWidth = 400, closeOnBackdropClick = true,
 }: {
   title: string
   onClose: () => void
   children: React.ReactNode
   maxWidth?: number
+  closeOnBackdropClick?: boolean
 }) {
   return (
     <div
@@ -264,7 +265,7 @@ export function Modal({
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 1000,
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      onClick={(e) => { if (closeOnBackdropClick && e.target === e.currentTarget) onClose() }}
     >
       <div style={{
         background: '#fff', borderRadius: radii.xxl,

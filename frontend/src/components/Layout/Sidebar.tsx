@@ -171,8 +171,8 @@ export function Sidebar({
       ref={menuRef}
       onClick={() => setHoveredSessionId(null)}
       style={{
-        width: collapsed ? 56 : 260,
-        minWidth: collapsed ? 56 : 260,
+        width: collapsed ? 56 : 256,
+        minWidth: collapsed ? 56 : 256,
         overflow: 'hidden',
         background: colors.sidebarBg,
         borderRight: `1px solid ${colors.borderLight}`,

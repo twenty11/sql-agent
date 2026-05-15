@@ -58,7 +58,7 @@ class GraphState(TypedDict):
         question_type: 问题类型（standalone|continuation|ambiguous）
         fusion_confidence: 融合置信度 0.0~1.0
         fusion_reason: 融合理由说明
-        intent_type: 意图类型（query|analysis|hybrid）
+        intent_type: 意图类型（query|analysis|hybrid|clarify）
         available_results: 当前会话可引用的历史结果摘要
         referenced_results: 本次实际引用的历史结果快照
     """
@@ -73,9 +73,10 @@ class GraphState(TypedDict):
     question_type: str                     # standalone | continuation | ambiguous
     fusion_confidence: float               # 置信度 0.0~1.0
     fusion_reason: str                     # 融合说明
-    intent_type: str                       # query | analysis | hybrid
+    intent_type: str                       # query | analysis | hybrid | clarify
     referenced_result_ids: List[str]       # 本轮引用的历史查询结果 ID
     sql_question: str                      # hybrid 场景下用于查询缺失数据的问题
+    clarification_message: str             # clarify 场景下给用户的澄清提示
 
     # 检索阶段
     retrieved_schemas: List[str]

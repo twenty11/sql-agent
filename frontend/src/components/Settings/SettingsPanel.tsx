@@ -4,6 +4,7 @@ import type { QuickQuestion, QuickQuestionInput, TableGroup } from '../../types/
 import { colors, radii, fontFamily, shadows } from '../../styles/tokens'
 import { ChevronDownIcon, CloseIcon, PlusIcon, TrashIcon } from '../Icons'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Tooltip } from '../ui/Tooltip'
 
 interface SettingsPanelProps {
   open: boolean
@@ -691,32 +692,27 @@ function TableRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <td
-        style={{
-          padding: '10px 12px',
-          fontSize: 14,
-          color: colors.textPrimary,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-        title={item.display_name || item.question_text}
-      >
-        {displayLabel(item)}
+      <td style={{ padding: '10px 12px', fontSize: 14, color: colors.textPrimary }}>
+        <Tooltip content={item.display_name || item.question_text}>
+          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {displayLabel(item)}
+          </div>
+        </Tooltip>
       </td>
       <td style={{ padding: '10px 12px', fontSize: 13, color: colors.textSecondary }}>
-        <div
-          title={item.question_text}
-          style={{
-            overflow: 'hidden',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            lineHeight: 1.45,
-          }}
-        >
-          {item.question_text}
-        </div>
+        <Tooltip content={item.question_text} maxWidth={280}>
+          <div
+            style={{
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              lineHeight: 1.45,
+            }}
+          >
+            {item.question_text}
+          </div>
+        </Tooltip>
       </td>
       <td style={{ padding: '10px 12px', textAlign: 'center' }}>
         {item.is_pinned && (
@@ -740,40 +736,43 @@ function TableRow({
       </td>
       <td style={{ padding: '8px 12px' }}>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <button
-            type="button"
-            title="上移"
-            disabled={globalIndex === 0}
-            onClick={onMoveUp}
-            style={{ ...iconBtnStyle, opacity: globalIndex === 0 ? 0.35 : 1 }}
-          >
-            <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>
+          <Tooltip content="上移">
+            <button
+              type="button"
+              disabled={globalIndex === 0}
+              onClick={onMoveUp}
+              style={{ ...iconBtnStyle, opacity: globalIndex === 0 ? 0.35 : 1 }}
+            >
+              <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>
+                <ChevronDownIcon width={12} height={12} color={colors.textSecondary} />
+              </span>
+            </button>
+          </Tooltip>
+          <Tooltip content="下移">
+            <button
+              type="button"
+              disabled={globalIndex === totalCount - 1}
+              onClick={onMoveDown}
+              style={{ ...iconBtnStyle, opacity: globalIndex === totalCount - 1 ? 0.35 : 1 }}
+            >
               <ChevronDownIcon width={12} height={12} color={colors.textSecondary} />
-            </span>
-          </button>
-          <button
-            type="button"
-            title="下移"
-            disabled={globalIndex === totalCount - 1}
-            onClick={onMoveDown}
-            style={{ ...iconBtnStyle, opacity: globalIndex === totalCount - 1 ? 0.35 : 1 }}
-          >
-            <ChevronDownIcon width={12} height={12} color={colors.textSecondary} />
-          </button>
+            </button>
+          </Tooltip>
           <button type="button" onClick={onTogglePinned} style={actionBtnStyle}>
             {item.is_pinned ? '取消' : '置顶'}
           </button>
           <button type="button" onClick={onEdit} style={actionBtnStyle}>
             编辑
           </button>
-          <button
-            type="button"
-            title="删除"
-            onClick={onDelete}
-            style={{ ...iconBtnStyle, color: colors.errorColor, borderColor: 'transparent' }}
-          >
-            <TrashIcon width={13} height={13} color={colors.errorColor} />
-          </button>
+          <Tooltip content="删除">
+            <button
+              type="button"
+              onClick={onDelete}
+              style={{ ...iconBtnStyle, color: colors.errorColor, borderColor: 'transparent' }}
+            >
+              <TrashIcon width={13} height={13} color={colors.errorColor} />
+            </button>
+          </Tooltip>
         </div>
       </td>
     </tr>
@@ -870,27 +869,28 @@ export function SettingsPanel({
           >
             设置
           </h1>
-          <button
-            type="button"
-            onClick={onClose}
-            title="关闭"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 30,
-              height: 30,
-              borderRadius: radii.md,
-              border: 'none',
-              background: 'transparent',
-              color: colors.textMuted,
-              cursor: 'pointer',
-            }}
-            onMouseEnter={(event) => (event.currentTarget.style.background = colors.hoverBg)}
-            onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
-          >
-            <CloseIcon width={15} height={15} color={colors.textMuted} />
-          </button>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                borderRadius: radii.md,
+                border: 'none',
+                background: 'transparent',
+                color: colors.textMuted,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(event) => (event.currentTarget.style.background = colors.hoverBg)}
+              onMouseLeave={(event) => (event.currentTarget.style.background = 'transparent')}
+            >
+              <CloseIcon width={15} height={15} color={colors.textMuted} />
+            </button>
+          </Tooltip>
         </div>
 
         {/* Body */}

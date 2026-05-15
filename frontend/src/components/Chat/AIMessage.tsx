@@ -121,7 +121,7 @@ export function AIMessage({ message }: AIMessageProps) {
         {/* 消息内容 */}
         <div
           style={{
-            fontSize: 14,
+            fontSize: 16,
             color: colors.textPrimary,
             lineHeight: 1.7,
             fontFamily,
@@ -151,7 +151,7 @@ export function AIMessage({ message }: AIMessageProps) {
         {/* 查询结果表格 */}
         {message.result && !message.thinking && (
           <div style={{ marginTop: 14 }}>
-            <ResultTable result={message.result} />
+            <ResultTable result={message.result} queryResultId={message.queryResultId} />
           </div>
         )}
 

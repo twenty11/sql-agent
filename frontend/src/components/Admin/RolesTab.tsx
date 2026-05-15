@@ -7,6 +7,7 @@ import {
   inputStyle, labelStyle,
   primaryBtnStyle, secondaryBtnStyle, dangerBtnStyle,
 } from './shared'
+import { Tooltip } from '../ui/Tooltip'
 
 export function RolesTab() {
   const [roles, setRoles] = useState<Role[]>([])
@@ -179,21 +180,22 @@ export function RolesTab() {
                 </td>
                 <td style={{ padding: '10px 16px', color: colors.textSecondary }}>{r.user_count}</td>
                 <td style={{ padding: '10px 16px', display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <button
-                    onClick={() => openPerm(r)}
-                    disabled={r.name === 'admin'}
-                    title={r.name === 'admin' ? 'admin 不受表级权限限制' : ''}
-                    style={{
-                      border: `1px solid ${colors.border}`,
-                      background: 'transparent', borderRadius: radii.sm,
-                      padding: '3px 8px', fontSize: 13,
-                      cursor: r.name === 'admin' ? 'not-allowed' : 'pointer',
-                      color: r.name === 'admin' ? colors.textMuted : colors.accent,
-                      fontFamily, whiteSpace: 'nowrap', flexShrink: 0,
-                    }}
-                  >
-                    配置分组
-                  </button>
+                  <Tooltip content={r.name === 'admin' ? 'admin 不受表级权限限制' : undefined}>
+                    <button
+                      onClick={() => openPerm(r)}
+                      disabled={r.name === 'admin'}
+                      style={{
+                        border: `1px solid ${colors.border}`,
+                        background: 'transparent', borderRadius: radii.sm,
+                        padding: '3px 8px', fontSize: 13,
+                        cursor: r.name === 'admin' ? 'not-allowed' : 'pointer',
+                        color: r.name === 'admin' ? colors.textMuted : colors.accent,
+                        fontFamily, whiteSpace: 'nowrap', flexShrink: 0,
+                      }}
+                    >
+                      配置分组
+                    </button>
+                  </Tooltip>
                   <button onClick={() => openEdit(r)} style={{
                     border: `1px solid ${colors.border}`, background: 'transparent',
                     borderRadius: radii.sm, padding: '3px 8px', fontSize: 13,
@@ -202,20 +204,21 @@ export function RolesTab() {
                   }}>
                     编辑
                   </button>
-                  <button
-                    onClick={() => setToDelete(r)}
-                    disabled={r.is_builtin}
-                    title={r.is_builtin ? '内置角色不可删除' : ''}
-                    style={{
-                      border: `1px solid ${colors.border}`, background: 'transparent',
-                      borderRadius: radii.sm, padding: '3px 8px', fontSize: 13,
-                      cursor: r.is_builtin ? 'not-allowed' : 'pointer',
-                      color: r.is_builtin ? colors.textMuted : colors.errorColor,
-                      fontFamily, whiteSpace: 'nowrap', flexShrink: 0,
-                    }}
-                  >
-                    删除
-                  </button>
+                  <Tooltip content={r.is_builtin ? '内置角色不可删除' : undefined}>
+                    <button
+                      onClick={() => setToDelete(r)}
+                      disabled={r.is_builtin}
+                      style={{
+                        border: `1px solid ${colors.border}`, background: 'transparent',
+                        borderRadius: radii.sm, padding: '3px 8px', fontSize: 13,
+                        cursor: r.is_builtin ? 'not-allowed' : 'pointer',
+                        color: r.is_builtin ? colors.textMuted : colors.errorColor,
+                        fontFamily, whiteSpace: 'nowrap', flexShrink: 0,
+                      }}
+                    >
+                      删除
+                    </button>
+                  </Tooltip>
                 </td>
               </tr>
             ))}

@@ -62,6 +62,7 @@ def get_initial_state(question: str, log_context=None) -> dict:
         "intent_type": "query",
         "referenced_result_ids": [],
         "sql_question": "",
+        "clarification_message": "",
         # 检索阶段
         "retrieved_schemas": [],
         # 表选择阶段
@@ -133,6 +134,8 @@ def create_workflow_without_answer() -> StateGraph:
     def route_after_context_fusion(state):
         """根据入口意图决定是否需要查询数据库。"""
         intent_type = state.get("intent_type", "query")
+        if intent_type == "clarify":
+            return END
         if intent_type == "analysis":
             return "load_results"
         return "retrieve"
@@ -143,6 +146,7 @@ def create_workflow_without_answer() -> StateGraph:
         {
             "load_results": "load_results",
             "retrieve": "retrieve",
+            END: END,
         }
     )
     workflow.add_edge("retrieve", "table_selection")
@@ -221,7 +225,7 @@ def create_workflow_without_answer() -> StateGraph:
     def execute_route_no_answer(state):
         """根据 SQL 执行结果决定重试、改写或结束。
 
-        约束：空结果仅允许触发一次改写，避免"天然空结果"场景进入循环。
+        约束：空结果不再自动改写，避免把真实无数据误改成偏离用户意图的新查询。
         """
         from config import get_settings
         settings = get_settings()
@@ -229,15 +233,7 @@ def create_workflow_without_answer() -> StateGraph:
 
         execution_success = state.get("execution_success", False)
         retry_count = state.get("retry_count", 0)
-        question_rewritten = state.get("question_rewritten", False)
-        execution_result = state.get("execution_result")
-
         if execution_success:
-            row_count = execution_result.get("row_count", 0) if execution_result else 0
-            # 对"有 SQL 但无数据"的场景做一次语义纠偏：
-            # 可能是用户问题表述不完整导致过滤条件过窄。
-            if row_count == 0 and not question_rewritten:
-                return "rewrite_question"
             if state.get("intent_type") == "hybrid":
                 return "load_results"
             return END  # 结束，后续由外部流式生成答案
@@ -285,8 +281,21 @@ def create_sql_evaluation_workflow() -> StateGraph:
     # 设置入口点
     workflow.set_entry_point("context_fusion")
 
-    # context_fusion → retrieve
-    workflow.add_edge("context_fusion", "retrieve")
+    # context_fusion → retrieve/END
+    def route_after_context_fusion(state):
+        """SQL 评估只处理需要新查库的 query/hybrid。"""
+        if state.get("intent_type") in {"clarify", "analysis"}:
+            return END
+        return "retrieve"
+
+    workflow.add_conditional_edges(
+        "context_fusion",
+        route_after_context_fusion,
+        {
+            "retrieve": "retrieve",
+            END: END,
+        }
+    )
 
     # retrieve → table_selection
     workflow.add_edge("retrieve", "table_selection")
@@ -364,8 +373,21 @@ def create_sql_generation_workflow() -> StateGraph:
     # 设置入口点
     workflow.set_entry_point("context_fusion")
 
-    # context_fusion → retrieve
-    workflow.add_edge("context_fusion", "retrieve")
+    # context_fusion → retrieve/END
+    def route_after_context_fusion(state):
+        """SQL-only 模式只处理需要新查库的 query/hybrid。"""
+        if state.get("intent_type") in {"clarify", "analysis"}:
+            return END
+        return "retrieve"
+
+    workflow.add_conditional_edges(
+        "context_fusion",
+        route_after_context_fusion,
+        {
+            "retrieve": "retrieve",
+            END: END,
+        }
+    )
 
     # retrieve → table_selection
     workflow.add_edge("retrieve", "table_selection")
@@ -711,6 +733,7 @@ def _intent_event(state: dict) -> dict:
         "referenced_results": referenced_results,
         "confidence": state.get("fusion_confidence", 1.0),
         "reason": state.get("fusion_reason", ""),
+        "clarification_message": state.get("clarification_message", ""),
     }
 
 

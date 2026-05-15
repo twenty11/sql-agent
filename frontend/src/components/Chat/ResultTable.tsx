@@ -1,14 +1,22 @@
-import * as XLSX from 'xlsx'
+import { useState } from 'react'
 import type { QueryResult } from '../../types/chat'
 import { colors, radii, fontFamily } from '../../styles/tokens'
 import { ExportIcon } from '../Icons'
+import { Tooltip } from '../ui/Tooltip'
+import { chatService } from '../../services/chat'
 
 interface ResultTableProps {
   result: QueryResult
+  queryResultId?: string
 }
 
-export function ResultTable({ result }: ResultTableProps) {
+export function ResultTable({ result, queryResultId }: ResultTableProps) {
   const { columns, rows, row_count } = result
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const canExport = !!queryResultId && !exporting
+  const truncated = !!result.truncated
+  const previewCount = result.preview_row_count ?? row_count
   const headerHeight = 36
   const headerTrackBackground =
     `linear-gradient(to bottom, ` +
@@ -19,11 +27,25 @@ export function ResultTable({ result }: ResultTableProps) {
     `#ffffff ${headerHeight + 1}px, ` +
     `#ffffff 100%)`
 
-  const exportXLSX = () => {
-    const ws = XLSX.utils.aoa_to_sheet([columns, ...rows.map((r) => r.map((v) => v ?? ''))])
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, '查询结果')
-    XLSX.writeFile(wb, `query_result_${Date.now()}.xlsx`)
+  const exportXLSX = async () => {
+    if (!queryResultId || exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const { blob, filename } = await chatService.exportQueryResult(queryResultId)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setExportError('导出失败，请稍后重试')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -60,28 +82,33 @@ export function ResultTable({ result }: ResultTableProps) {
             fontWeight: 600,
             letterSpacing: '0.125px',
           }}>
-            {row_count} 行
+            {truncated ? `仅展示前 ${previewCount} 行` : `${row_count} 行`}
           </span>
         </div>
-        <button
-          onClick={exportXLSX}
-          title="导出 Excel"
-          style={{
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '4px',
-            borderRadius: radii.sm,
-            color: colors.textSecondary,
-            transition: 'background 0.15s ease',
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = colors.hoverBg)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          <ExportIcon width={14} height={14} color="currentColor" />
-        </button>
+        <Tooltip content={queryResultId ? '导出完整 Excel' : '查询完成后可导出完整结果'}>
+          <button
+            onClick={exportXLSX}
+            disabled={!canExport}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: canExport ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              alignItems: 'center',
+              padding: '4px',
+              borderRadius: radii.sm,
+              color: canExport ? colors.textSecondary : colors.textMuted,
+              opacity: canExport ? 1 : 0.55,
+              transition: 'background 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              if (canExport) e.currentTarget.style.background = colors.hoverBg
+            }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <ExportIcon width={14} height={14} color="currentColor" />
+          </button>
+        </Tooltip>
       </div>
 
       {/* 表格内容 */}
@@ -147,17 +174,17 @@ export function ResultTable({ result }: ResultTableProps) {
                       padding: '10px 14px',
                       color: colors.textPrimary,
                       maxWidth: 200,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
                     }}
-                    title={cell === null ? 'null' : String(cell)}
                   >
-                    {cell === null ? (
-                      <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>null</span>
-                    ) : (
-                      String(cell)
-                    )}
+                    <Tooltip content={cell === null ? 'null' : String(cell)}>
+                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {cell === null ? (
+                          <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>null</span>
+                        ) : (
+                          String(cell)
+                        )}
+                      </div>
+                    </Tooltip>
                   </td>
                 ))}
                 <td />
@@ -165,18 +192,22 @@ export function ResultTable({ result }: ResultTableProps) {
             ))}
           </tbody>
         </table>
-        {row_count > 100 && (
+        {(row_count > 100 || truncated || exportError) && (
           <div
             style={{
               padding: '8px 12px',
               fontSize: 12,
-              color: colors.textMuted,
+              color: exportError ? colors.errorColor : colors.textMuted,
               fontFamily,
               borderTop: `1px solid ${colors.border}`,
               background: colors.tableHeadBg,
             }}
           >
-            仅显示前 100 行，共 {row_count} 行
+            {exportError || (
+              truncated
+                ? `结果较多，当前仅展示前 ${previewCount} 行，可导出 Excel 查看完整数据`
+                : `仅显示前 100 行，共 ${row_count} 行`
+            )}
           </div>
         )}
       </div>

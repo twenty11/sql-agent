@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # 工作流配置
     retrieval_top_k: int = Field(default=5, description="检索返回的 Top-K 表数量")
     max_retry_count: int = Field(default=3, description="SQL 生成/执行最大重试次数")
+    query_preview_max_rows: int = Field(default=1000, description="问答链路最多返回的预览行数")
+    query_statement_timeout_ms: int = Field(default=60000, description="问答查询 SQL 超时时间（毫秒）")
+    export_statement_timeout_ms: int = Field(default=300000, description="导出 SQL 超时时间（毫秒）")
+    export_chunk_size: int = Field(default=2000, description="导出分批读取行数")
+    export_max_rows: int = Field(default=1048575, description="单次 Excel 导出最大数据行数")
 
     # 启动配置
     auto_sync_on_startup: bool = Field(

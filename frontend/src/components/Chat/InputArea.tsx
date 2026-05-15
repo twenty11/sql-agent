@@ -2,24 +2,100 @@ import React, { useRef, useCallback, useEffect, useState } from 'react'
 import { colors, fontFamily, shadows } from '../../styles/tokens'
 import { ArrowUpIcon } from '../Icons'
 
+const CYCLE_TEXTS = [
+  "想看哪个业务的数据？",
+  "输入您的查询需求",
+  "有什么想查的数据吗？",
+  "告诉我您想了解什么业务情况？",
+  "想查询哪些数据呢？",
+  "请输入自然语言查询",
+  "有什么业务数据需要我帮您查？",
+  "来，问我点业务上的问题试试",
+  "您今天想看什么数据？",
+]
+const STATIC_PLACEHOLDER = "畅所欲言"
+
+type SlotPhase = 'idle' | 'exiting' | 'entering'
+
+function PlaceholderSlot({ dynamic }: { dynamic: boolean }) {
+  const [curIdx, setCurIdx] = useState(0)
+  const [nxtIdx, setNxtIdx] = useState(1)
+  const [phase, setPhase] = useState<SlotPhase>('idle')
+
+  useEffect(() => {
+    if (!dynamic || phase !== 'idle') return
+    const id = setTimeout(() => setPhase('exiting'), 7000)
+    return () => clearTimeout(id)
+  }, [dynamic, phase])
+
+  if (!dynamic) return <>{STATIC_PLACEHOLDER}</>
+
+  const onExitDone = () => setPhase('entering')
+  const onEnterDone = () => {
+    setCurIdx(nxtIdx)
+    setNxtIdx(n => (n + 1) % CYCLE_TEXTS.length)
+    setPhase('idle')
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          position: 'absolute', inset: 0,
+          animation: phase === 'exiting' ? 'ph-exit 0.32s ease forwards' : 'none',
+          transform: phase === 'entering' ? 'translateY(-100%)' : undefined,
+          opacity: phase === 'entering' ? 0 : undefined,
+        }}
+        onAnimationEnd={phase === 'exiting' ? onExitDone : undefined}
+      >
+        {CYCLE_TEXTS[curIdx]}
+      </div>
+      {phase !== 'idle' && (
+        <div
+          style={{
+            position: 'absolute', inset: 0,
+            transform: phase === 'exiting' ? 'translateY(100%)' : undefined,
+            animation: phase === 'entering' ? 'ph-enter 0.32s ease forwards' : 'none',
+          }}
+          onAnimationEnd={phase === 'entering' ? onEnterDone : undefined}
+        >
+          {CYCLE_TEXTS[nxtIdx]}
+        </div>
+      )}
+    </>
+  )
+}
+
 interface InputAreaProps {
   value: string
   onChange: (value: string) => void
   onSend: (q: string) => boolean | Promise<boolean>
   isStreaming: boolean
   onStop: () => void
+  dynamicPlaceholder?: boolean
 }
 
-export function InputArea({ value, onChange, onSend, isStreaming, onStop }: InputAreaProps) {
+export function InputArea({ value, onChange, onSend, isStreaming, onStop, dynamicPlaceholder }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollDivRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [isSending, setIsSending] = useState(false)
+  const singleLineHeightRef = useRef(0)
+
+  const updateBorderRadius = (scrollHeight: number) => {
+    if (!containerRef.current) return
+    const isMulti = singleLineHeightRef.current > 0 && scrollHeight > singleLineHeightRef.current
+    containerRef.current.style.borderRadius = isMulti ? '28px' : '9999px'
+  }
 
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
+    const sh = el.scrollHeight
+    el.style.height = `${sh}px`
+    if (singleLineHeightRef.current === 0) singleLineHeightRef.current = sh
+    updateBorderRadius(sh)
     if (scrollDivRef.current) {
       scrollDivRef.current.scrollTop = scrollDivRef.current.scrollHeight
     }
@@ -29,9 +105,9 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
     onChange(e.target.value)
     const el = e.target
     el.style.height = 'auto'
-    // No maxHeight on the textarea — the wrapper div caps at 204px and scrolls.
-    el.style.height = el.scrollHeight + 'px'
-    // Keep wrapper scrolled to bottom so the cursor is always visible while typing.
+    const sh = el.scrollHeight
+    el.style.height = sh + 'px'
+    updateBorderRadius(sh)
     requestAnimationFrame(() => {
       if (scrollDivRef.current) {
         scrollDivRef.current.scrollTop = scrollDivRef.current.scrollHeight
@@ -67,10 +143,11 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
 
   return (
     <div
+      ref={containerRef}
       style={{
         border: `1px solid ${colors.borderLight}`,
-        borderRadius: '30px',
-        boxShadow: shadows.input,
+        borderRadius: '9999px',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.02)',
         background: colors.inputBg,
         display: 'flex',
         alignItems: 'flex-end',
@@ -82,9 +159,9 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
        * The top/bottom divs are outside the scroll container so they never scroll away,
        * giving the textarea a persistent 18px visual padding on both edges.
        */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {/* Fixed top padding — never scrolls */}
-        <div style={{ height: 18, flexShrink: 0 }} />
+        <div style={{ height: 16, flexShrink: 0 }} />
 
         {/* Scrollable content — capped at 204px (240 total − 18 top − 18 bottom) */}
         <div
@@ -100,7 +177,8 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
             value={value}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder="畅所欲言"
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus={!!dynamicPlaceholder}
             rows={1}
             style={{
               display: 'block',
@@ -108,13 +186,12 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
               border: 'none',
               outline: 'none',
               resize: 'none',
-              // Vertical padding lives in the fixed spacer divs above/below.
               padding: '0 20px 0 22px',
-              fontSize: 14,
+              fontSize: 16,
               fontFamily,
               color: colors.textPrimary,
               background: 'transparent',
-              lineHeight: 1.5,
+              lineHeight: 1.75,
               overflow: 'hidden',
               boxSizing: 'border-box',
             }}
@@ -122,7 +199,29 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
         </div>
 
         {/* Fixed bottom padding — never scrolls */}
-        <div style={{ height: 18, flexShrink: 0 }} />
+        <div style={{ height: 16, flexShrink: 0 }} />
+
+        {/* Animated placeholder overlay — only visible when textarea is empty */}
+        {!value && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 16,
+              left: 22,
+              right: 20,
+              height: '1.75em',
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              color: 'rgba(0,0,0,0.35)',
+              fontSize: 16,
+              lineHeight: 1.75,
+              fontFamily,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <PlaceholderSlot dynamic={!!dynamicPlaceholder} />
+          </div>
+        )}
       </div>
 
       <div
@@ -137,7 +236,7 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
           <button
             onClick={onStop}
             style={{
-              width: 36, height: 36,
+              width: 40, height: 40,
               borderRadius: '50%',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               cursor: 'pointer',
@@ -155,7 +254,7 @@ export function InputArea({ value, onChange, onSend, isStreaming, onStop }: Inpu
             onClick={handleSend}
             disabled={!hasContent || isSending}
             style={{
-              width: 36, height: 36,
+              width: 40, height: 40,
               borderRadius: '50%',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               cursor: hasContent && !isSending ? 'pointer' : 'default',

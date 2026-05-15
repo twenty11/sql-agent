@@ -5,6 +5,7 @@ import { UserMessage } from '../Chat/UserMessage'
 import { AIMessage } from '../Chat/AIMessage'
 import { InputArea } from '../Chat/InputArea'
 import { TableGroupSelector } from '../Chat/TableGroupSelector'
+import { Tooltip } from '../ui/Tooltip'
 
 interface ChatAreaProps {
   title: string
@@ -66,10 +67,9 @@ function QuickQuestionChips({
       }}
     >
       {pinned.map((item) => (
+        <Tooltip key={item.id} content={item.question_text} maxWidth={220} placement="top">
         <button
-          key={item.id}
           type="button"
-          title={item.question_text}
           onClick={() => onApply(item)}
           style={{
             maxWidth: 156,
@@ -80,7 +80,7 @@ function QuickQuestionChips({
             border: '1px solid rgba(0,0,0,0.06)',
             borderRadius: radii.pill,
             background: 'rgba(255,255,255,0.72)',
-            color: 'rgba(0,0,0,0.46)',
+            color: 'rgba(0,0,0,0.62)',
             fontSize: 12,
             fontFamily,
             cursor: 'pointer',
@@ -94,6 +94,7 @@ function QuickQuestionChips({
             {quickQuestionLabel(item)}
           </span>
         </button>
+        </Tooltip>
       ))}
     </div>
   )
@@ -108,6 +109,7 @@ function InputDock({
   isStreaming,
   onStop,
   onApplyQuickQuestion,
+  dynamicPlaceholder,
 }: {
   quickQuestions: QuickQuestion[]
   selectedGroupId: string | null
@@ -117,6 +119,7 @@ function InputDock({
   isStreaming: boolean
   onStop: () => void
   onApplyQuickQuestion: (item: QuickQuestion) => void
+  dynamicPlaceholder?: boolean
 }) {
   return (
     <div style={{ position: 'relative' }}>
@@ -131,6 +134,7 @@ function InputDock({
         onSend={onSend}
         isStreaming={isStreaming}
         onStop={onStop}
+        dynamicPlaceholder={dynamicPlaceholder}
       />
     </div>
   )
@@ -332,6 +336,14 @@ export function ChatArea({
       }}
     >
       <style>{`
+        @keyframes ph-exit {
+          from { transform: translateY(0); opacity: 1; }
+          to { transform: translateY(-100%); opacity: 0; }
+        }
+        @keyframes ph-enter {
+          from { transform: translateY(100%); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
         .quick-question-chip-row::-webkit-scrollbar {
           display: none;
         }
@@ -383,7 +395,7 @@ export function ChatArea({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            paddingTop: 'calc(16vh)',
+            paddingTop: 'calc(20vh)',
             paddingBottom: '8vh',
             boxSizing: 'border-box',
             overflowY: 'auto',
@@ -395,7 +407,7 @@ export function ChatArea({
               display: 'flex',
               alignItems: 'center',
               gap: 12,
-              marginBottom: 80,
+              marginBottom: 63,
               animation: 'fadeIn 0.4s ease',
             }}
           >
@@ -410,17 +422,20 @@ export function ChatArea({
           </div>
 
           {/* 输入框 */}
-          <div style={{ width: '100%', maxWidth: 800, padding: '0 24px', boxSizing: 'border-box' }}>
-            <InputDock
-              quickQuestions={quickQuestions}
-              selectedGroupId={selectedGroupId}
-              inputValue={inputValue}
-              onInputChange={onInputChange}
-              onSend={onSend}
-              isStreaming={isStreaming}
-              onStop={onStop}
-              onApplyQuickQuestion={onApplyQuickQuestion}
-            />
+          <div style={{ width: '100%', padding: '0 24px', boxSizing: 'border-box' }}>
+            <div style={{ maxWidth: 800, margin: '0 auto' }}>
+              <InputDock
+                quickQuestions={quickQuestions}
+                selectedGroupId={selectedGroupId}
+                inputValue={inputValue}
+                onInputChange={onInputChange}
+                onSend={onSend}
+                isStreaming={isStreaming}
+                onStop={onStop}
+                onApplyQuickQuestion={onApplyQuickQuestion}
+                dynamicPlaceholder={true}
+              />
+            </div>
           </div>
         </div>
       ) : (
@@ -451,7 +466,7 @@ export function ChatArea({
 
           <div
             style={{
-              padding: '0 24px 16px',
+              padding: '0 24px 28px',
               flexShrink: 0,
             }}
           >
@@ -465,6 +480,7 @@ export function ChatArea({
                 isStreaming={isStreaming}
                 onStop={onStop}
                 onApplyQuickQuestion={onApplyQuickQuestion}
+                dynamicPlaceholder={false}
               />
             </div>
           </div>

@@ -315,10 +315,11 @@ body：
 | `conversation_history` | 最近历史对话 |
 | `fused_question` | 上下文融合后的问题 |
 | `question_type` | `standalone`、`continuation`、`ambiguous` |
-| `intent_type` | `query`、`analysis`、`hybrid` |
+| `intent_type` | `query`、`analysis`、`hybrid`、`clarify` |
 | `available_results` | 当前会话可引用的历史查询结果摘要 |
 | `referenced_result_ids` | 本轮引用的历史结果 ID |
 | `sql_question` | hybrid 场景中需要新查数据的子问题 |
+| `clarification_message` | clarify 场景中返回给用户的澄清提示 |
 | `retrieved_schemas` | Milvus 检索到的表结构文档 |
 | `selected_tables` | LLM 选择的表及原因 |
 | `join_plan` | 多表 JOIN 计划 |
@@ -337,14 +338,14 @@ body：
 
 | 节点 | 作用 |
 | --- | --- |
-| `context_fusion_node` | 结合历史对话和历史查询结果，判断问题类型和意图，生成 `fused_question` / `sql_question` |
+| `context_fusion_node` | 结合历史对话和历史查询结果，判断问题类型和意图，生成 `fused_question` / `sql_question` / `clarification_message` |
 | `retrieve_node` | 对问题做 embedding，在 Milvus 中检索相关表结构，并应用表分组和 RBAC 过滤 |
 | `table_selection_node` | LLM 从候选表中选择真正需要的表，输出选择理由 |
 | `join_planning_node` | 多表场景下规划 JOIN 顺序、字段和 JOIN 类型 |
 | `generate_sql_node` | 基于问题、表结构、JOIN 计划和错误上下文生成 SQL |
 | `check_query_node` | 校验 SQL 语法、安全性、是否只读、是否越权 |
 | `execute_node` | 使用 SQLAlchemy 同步引擎执行 SQL，返回结构化结果 |
-| `rewrite_question_node` | SQL 无法生成或空结果时改写问题后重新检索 |
+| `rewrite_question_node` | SQL 明确无法生成时改写问题后重新检索 |
 | `result_loader_node` | analysis/hybrid 场景加载历史查询结果快照，构造分析上下文 |
 | `generate_answer_stream` | 图执行结束后，在图外流式生成最终答案和解释 |
 
@@ -353,6 +354,7 @@ body：
 ```mermaid
 flowchart TD
     A[context_fusion] --> B{intent_type}
+    B -->|clarify| K[END]
     B -->|analysis| R[result_loader]
     B -->|query/hybrid| C[retrieve]
     C --> D[table_selection]
@@ -366,7 +368,6 @@ flowchart TD
     H -->|cannot generate SQL and not rewritten| J[rewrite_question]
     J --> C
     I -->|success + hybrid| R
-    I -->|success + empty + not rewritten| J
     I -->|success| K[END]
     I -->|failed + retry available| G
     I -->|failed| K
@@ -377,17 +378,19 @@ flowchart TD
 
 ### 10.4 意图类型
 
-`context_fusion_node` 支持三类意图：
+`context_fusion_node` 支持四类意图：
 
 - `query`：需要查询数据库。
 - `analysis`：只基于历史查询结果回答，不再查询数据库。
 - `hybrid`：同时引用历史结果，又需要查询新增数据，执行 SQL 后再合并分析。
+- `clarify`：问题不是数据查询、查询条件不足、引用对象不明确，或要求分析但没有可引用历史结果；不查库，直接提示用户补充条件。
 
 例如：
 
 - “查询 2025 年偿付能力指标”通常是 `query`。
 - “分析刚才结果里哪家公司异常”通常是 `analysis`。
 - “把刚才 A 公司和 B 公司同口径比较一下”可能是 `hybrid`，如果 B 公司数据还未查询，则先生成 `sql_question` 查询缺失部分，再进行分析回答。
+- “分析一下”且没有明确引用对象时是 `clarify`。
 
 ## 11. SQL 生成与安全校验
 
@@ -412,7 +415,7 @@ SQL 校验由 `check_query_node` 完成，核心策略：
 - 使用同步 SQLAlchemy engine。
 - 返回 `columns`、`rows`、`row_count`。
 - 执行失败会把错误写入状态，并触发重试路由。
-- 成功但 `row_count == 0` 且问题还未改写时，会触发一次 `rewrite_question_node`，避免由于问法不完整导致过滤条件过窄。
+- 成功但 `row_count == 0` 时不再自动改写问题，直接由回答生成器说明未查到数据和可能原因，避免把真实无数据误改成偏离用户意图的新查询。
 
 ## 12. 向量库设计
 
@@ -655,10 +658,11 @@ npm run build
 
 ## 16. 测试与验证
 
-后端当前有 `backend/tests/test_analysis_routing.py`，覆盖：
+后端当前有 `backend/tests/test_analysis_routing.py` 和 `backend/tests/test_workflow_routing.py`，覆盖：
 
 - `CONTEXT_FUSION_PROMPT` 的输入变量。
-- analysis/hybrid 意图 JSON 解析。
+- analysis/hybrid/clarify 意图 JSON 解析。
+- clarify 直接回答、无历史路由和历史结果默认引用收紧。
 - 历史查询结果 ID 归一化。
 - 历史结果引用权限过滤。
 - 分析上下文构建、行数截断和数值列统计。

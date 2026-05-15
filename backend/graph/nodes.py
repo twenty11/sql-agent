@@ -82,14 +82,13 @@ def get_vector_store() -> MilvusStore:
 
 def context_fusion_node(state: GraphState) -> Dict[str, Any]:
     """
-    上下文融合节点：判断问题类型并融合历史上下文
+    上下文融合节点：判断问题类型、融合历史上下文并决定入口意图
 
     职责：
-    1. 如果无历史对话，直接透传问题
-    2. 如果有历史对话，调用 LLM 判断问题类型（standalone/continuation/ambiguous）
-    3. 对于 continuation 类型，融合历史上下文生成完整问题
-    4. 对于 ambiguous 类型，降级为原始问题并标记低置信度
-    5. 对于 standalone 类型，直接透传原始问题
+    1. 始终调用 LLM 判断问题类型（standalone/continuation/ambiguous）
+    2. 识别 query/analysis/hybrid/clarify 四类入口意图
+    3. 对 continuation 类型融合历史上下文生成完整问题
+    4. 对信息不足、非数据查询或无可引用结果的分析请求返回澄清提示
 
     Args:
         state: 当前工作流状态
@@ -102,7 +101,6 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
             - fusion_reason: 融合理由
     """
     question = state["question"]
-    original_question = state.get("original_question") or question
     conversation_history = state.get("conversation_history")
     available_results = state.get("available_results") or []
     log_context = state.get("log_context")
@@ -110,27 +108,7 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
     # 记录日志
     logger = NodeLogger(log_context, "context_fusion")
 
-    # 无历史且无可引用结果时直接透传
-    if (not conversation_history or len(conversation_history) == 0) and not available_results:
-        print(f"[上下文融合节点] 无历史对话（conversation_history 类型={type(conversation_history)}, 长度={len(conversation_history) if conversation_history else 0}），直接透传问题: {question}")
-        logger.record(
-            question_type="standalone",
-            fusion_confidence=1.0,
-            fusion_reason="无历史对话",
-            fused_question=question,
-            intent_type="query",
-        )
-        return {
-            "fused_question": question,
-            "question_type": "standalone",
-            "fusion_confidence": 1.0,
-            "fusion_reason": "无历史对话，直接透传",
-            "intent_type": "query",
-            "referenced_result_ids": [],
-            "sql_question": question,
-        }
-
-    # 有历史时调用 LLM 判断并融合
+    # 始终调用 LLM 做入口路由，避免首轮模糊/非数据问题被强行查库。
     llm = get_llm()
     chain = CONTEXT_FUSION_PROMPT | llm | StrOutputParser()
 
@@ -148,21 +126,34 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
     intent_type = fusion["intent_type"]
     fused_question = fusion["fused_question"]
     sql_question = fusion["sql_question"] or fused_question
+    clarification_message = fusion.get("clarification_message", "")
     referenced_result_ids = _normalize_referenced_result_ids(
         fusion["referenced_result_ids"],
         available_results,
     )
-    if intent_type in ("analysis", "hybrid") and not referenced_result_ids and available_results:
-        referenced_result_ids = [available_results[0]["id"]]
+    if intent_type in ("analysis", "hybrid") and not referenced_result_ids:
+        if available_results and _has_explicit_result_reference(question):
+            referenced_result_ids = [available_results[0]["id"]]
+        else:
+            intent_type = "clarify"
+            question_type = "ambiguous"
+            fused_question = question
+            sql_question = ""
+            clarification_message = clarification_message or _default_clarification_message(
+                has_available_results=bool(available_results)
+            )
 
-    # 低置信度时降级为原始问题
+    # 低置信度时不再强行查询，改为让用户补充信息。
     if fusion_confidence < 0.6:
-        print(f"[上下文融合节点] 置信度 {fusion_confidence} < 0.6，降级为原始问题")
+        print(f"[上下文融合节点] 置信度 {fusion_confidence} < 0.6，转为澄清")
         fused_question = question
         question_type = "ambiguous"
-        intent_type = "query"
-        sql_question = question
+        intent_type = "clarify"
+        sql_question = ""
         referenced_result_ids = []
+        clarification_message = clarification_message or _default_clarification_message(
+            has_available_results=bool(available_results)
+        )
 
     if intent_type == "hybrid":
         fused_question = sql_question or fused_question
@@ -170,12 +161,17 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
         sql_question = sql_question or fused_question
     else:
         sql_question = ""
+        if intent_type == "clarify":
+            clarification_message = clarification_message or _default_clarification_message(
+                has_available_results=bool(available_results)
+            )
 
     print(f"[上下文融合节点] 问题类型: {question_type}, 意图: {intent_type}, 置信度: {fusion_confidence}")
     print(f"[上下文融合节点] 原始问题: {question}")
     print(f"[上下文融合节点] 融合后问题: {fused_question}")
     print(f"[上下文融合节点] SQL问题: {sql_question}")
     print(f"[上下文融合节点] 引用结果: {referenced_result_ids}")
+    print(f"[上下文融合节点] 澄清提示: {clarification_message}")
     print(f"[上下文融合节点] 融合理由: {fusion_reason}")
 
     # 记录关键信息
@@ -187,6 +183,7 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
         fusion_confidence=fusion_confidence,
         fusion_reason=fusion_reason,
         referenced_result_ids=referenced_result_ids,
+        clarification_message=clarification_message,
     )
 
     return {
@@ -197,6 +194,7 @@ def context_fusion_node(state: GraphState) -> Dict[str, Any]:
         "intent_type": intent_type,
         "referenced_result_ids": referenced_result_ids,
         "sql_question": sql_question,
+        "clarification_message": clarification_message,
     }
 
 
@@ -225,6 +223,7 @@ def _parse_context_fusion(llm_output: str, fallback_question: str) -> Dict[str, 
         "fused_question": fallback_question,
         "sql_question": fallback_question,
         "referenced_result_ids": [],
+        "clarification_message": "",
     }
 
     text = llm_output.strip()
@@ -238,7 +237,7 @@ def _parse_context_fusion(llm_output: str, fallback_question: str) -> Dict[str, 
         intent_type = str(data.get("intent_type", parsed["intent_type"])).lower()
         if question_type in ("standalone", "continuation", "ambiguous"):
             parsed["question_type"] = question_type
-        if intent_type in ("query", "analysis", "hybrid"):
+        if intent_type in ("query", "analysis", "hybrid", "clarify"):
             parsed["intent_type"] = intent_type
         parsed["confidence"] = max(0.0, min(1.0, float(data.get("confidence", parsed["confidence"]))))
         parsed["reasoning"] = str(data.get("reasoning", data.get("fusion_reason", ""))).strip()
@@ -246,6 +245,9 @@ def _parse_context_fusion(llm_output: str, fallback_question: str) -> Dict[str, 
         parsed["sql_question"] = str(data.get("sql_question") or parsed["fused_question"]).strip()
         ids = data.get("referenced_result_ids") or []
         parsed["referenced_result_ids"] = [str(v) for v in ids if v]
+        parsed["clarification_message"] = str(
+            data.get("clarification_message") or data.get("clarify_message") or ""
+        ).strip()
         return parsed
     except Exception:
         pass
@@ -274,7 +276,39 @@ def _parse_context_fusion(llm_output: str, fallback_question: str) -> Dict[str, 
             parsed["fused_question"] = line.split(':', 1)[1].strip()
             parsed["sql_question"] = parsed["fused_question"]
 
+        elif '澄清提示' in line and ':' in line:
+            parsed["clarification_message"] = line.split(':', 1)[1].strip()
+
     return parsed
+
+
+_RESULT_REFERENCE_PATTERNS = (
+    "刚才",
+    "刚刚",
+    "上面",
+    "前面",
+    "前述",
+    "上述",
+    "这个结果",
+    "这个数据",
+    "这些结果",
+    "这些数据",
+    "历史结果",
+    "查询结果",
+    "上一轮",
+    "前一轮",
+)
+
+
+def _has_explicit_result_reference(question: str) -> bool:
+    """判断用户是否明确指代了历史查询结果。"""
+    return any(pattern in question for pattern in _RESULT_REFERENCE_PATTERNS)
+
+
+def _default_clarification_message(has_available_results: bool = False) -> str:
+    if has_available_results:
+        return "请说明要引用哪一次历史查询结果，或补充要查询的公司、指标、期间等条件。"
+    return "当前没有可引用的查询结果。请先查询相关数据，或补充公司、指标、期间等条件。"
 
 
 def _format_available_results_for_prompt(available_results: List[dict]) -> str:
@@ -346,6 +380,8 @@ def rewrite_question_node(state: GraphState) -> Dict[str, Any]:
     return {
         "question": rewritten_question,
         "original_question": original_question,
+        "fused_question": rewritten_question,
+        "sql_question": rewritten_question,
         "question_rewritten": True,
         "retry_count": 0,  # 重置重试计数
     }
@@ -1021,6 +1057,32 @@ def check_query_node(state: GraphState) -> Dict[str, Any]:
 
 # ============== 执行节点 ==============
 
+def _normalized_positive_int(value: Any, fallback: int) -> int:
+    """Return a positive integer config value with a conservative fallback."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _set_local_statement_timeout(conn, timeout_ms: int) -> None:
+    """Set PostgreSQL statement_timeout for the current transaction only."""
+    if timeout_ms <= 0:
+        return
+    conn.execute(
+        text("SELECT set_config('statement_timeout', :timeout_value, true)"),
+        {"timeout_value": f"{timeout_ms}ms"},
+    )
+
+
+def _fetch_preview_rows(result, preview_limit: int) -> Tuple[List[Any], bool]:
+    """Fetch only preview rows plus one sentinel row to detect truncation."""
+    rows = result.fetchmany(preview_limit + 1)
+    truncated = len(rows) > preview_limit
+    return rows[:preview_limit], truncated
+
+
 def execute_node(state: GraphState) -> Dict[str, Any]:
     """
     执行节点：在数据库中执行 SQL
@@ -1046,15 +1108,21 @@ def execute_node(state: GraphState) -> Dict[str, Any]:
         import time
         start_time = time.time()
 
+        settings = get_settings()
+        preview_limit = _normalized_positive_int(settings.query_preview_max_rows, 1000)
+        timeout_ms = _normalized_positive_int(settings.query_statement_timeout_ms, 60000)
+
         engine = get_engine()
         with engine.connect() as conn:
-            result = conn.execute(text(sql))
+            _set_local_statement_timeout(conn, timeout_ms)
+            stream_conn = conn.execution_options(stream_results=True)
+            result = stream_conn.execute(text(sql))
 
             # 获取列名
             columns = list(result.keys())
 
-            # 获取所有行数据
-            rows = result.fetchall()
+            # 只取预览行，避免大结果集一次性进入后端内存。
+            rows, truncated = _fetch_preview_rows(result, preview_limit)
 
             execution_time_ms = int((time.time() - start_time) * 1000)
 
@@ -1063,14 +1131,20 @@ def execute_node(state: GraphState) -> Dict[str, Any]:
                 "columns": columns,
                 "rows": [list(row) for row in rows],
                 "row_count": len(rows),
+                "preview_row_count": len(rows),
+                "preview_limit": preview_limit,
+                "truncated": truncated,
             }
 
-            print(f"[执行节点] 执行成功，返回 {len(rows)} 行数据")
+            truncation_note = "，结果已截断" if truncated else ""
+            print(f"[执行节点] 执行成功，返回预览 {len(rows)} 行数据{truncation_note}")
 
             # 记录关键信息
             logger.record(
                 execution_success=True,
                 row_count=len(rows),
+                preview_limit=preview_limit,
+                truncated=truncated,
                 execution_time_ms=execution_time_ms
             )
 
@@ -1106,9 +1180,6 @@ def result_loader_node(state: GraphState) -> Dict[str, Any]:
     intent_type = state.get("intent_type", "query")
     log_context = state.get("log_context")
     logger = NodeLogger(log_context, "load_results")
-
-    if not referenced_result_ids and available_results:
-        referenced_result_ids = [available_results[0]["id"]]
 
     loaded_results = []
     if session_id and referenced_result_ids:
@@ -1290,12 +1361,17 @@ def _format_result(result: Dict[str, Any]) -> str:
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     row_count = result.get("row_count", 0)
+    truncated = bool(result.get("truncated"))
+    preview_limit = result.get("preview_limit") or row_count
     
     if row_count == 0:
         return "查询结果为空（0 行数据）"
     
     # 构建表格形式的结果
-    lines = [f"共 {row_count} 行数据"]
+    if truncated:
+        lines = [f"结果较多，仅展示前 {row_count} 行预览（预览上限 {preview_limit} 行）"]
+    else:
+        lines = [f"共 {row_count} 行数据"]
     lines.append("列名: " + ", ".join(columns))
     lines.append("-" * 40)
     
@@ -1331,11 +1407,16 @@ def generate_answer_stream(state: dict) -> Generator[str, None, None]:
     execution_success = state.get("execution_success", False)
     schemas = state.get("retrieved_schemas", [])
     intent_type = state.get("intent_type", "query")
-    
-    llm = get_llm()
+
     query_explanation = ""
-    
-    if intent_type == "analysis" or state.get("analysis_context"):
+
+    if intent_type == "clarify":
+        yield state.get("clarification_message") or _default_clarification_message(
+            has_available_results=bool(state.get("available_results"))
+        )
+
+    elif intent_type == "analysis" or state.get("analysis_context"):
+        llm = get_llm()
         question = state.get("question", fused_question)
         analysis_context = state.get("analysis_context") or _build_analysis_context(
             referenced_results=state.get("referenced_results") or [],
@@ -1357,6 +1438,7 @@ def generate_answer_stream(state: dict) -> Generator[str, None, None]:
             query_explanation = f"本次为数据分析：引用 {referenced_count} 条历史查询结果，未重新查询数据库。"
 
     elif execution_success:
+        llm = get_llm()
         # 成功执行，流式生成答案
         sql = state.get("generated_sql", "")
         result = state.get("execution_result")
@@ -1384,6 +1466,7 @@ def generate_answer_stream(state: dict) -> Generator[str, None, None]:
             yield content
         
     else:
+        llm = get_llm()
         # 执行失败，流式生成错误说明
         error = state.get("error_message", "未知错误")
         

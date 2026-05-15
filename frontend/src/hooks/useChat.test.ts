@@ -82,4 +82,51 @@ describe('chat stream helpers', () => {
     expect(failed.error).toBe('bad')
     expect(failed.thinking).toBe(false)
   })
+
+  it('preserves truncated result metadata from SSE result events', () => {
+    const base: Message = {
+      id: 'm1',
+      role: 'ai',
+      content: 'done',
+      status: 'streaming',
+      runId: 'r1',
+      createdAt: 1,
+    }
+
+    const result = {
+      columns: ['id'],
+      rows: [[1]],
+      row_count: 1,
+      preview_row_count: 1,
+      preview_limit: 1,
+      truncated: true,
+    }
+    const next = applyStreamEventToMessage(base, { type: 'result', data: result }, '2-0')
+
+    expect(next.result?.truncated).toBe(true)
+    expect(next.result?.preview_limit).toBe(1)
+    expect(next.lastEventId).toBe('2-0')
+  })
+
+  it('stores query result ids from server history and terminal done events', () => {
+    const restored = serverMsgToLocal({
+      id: 'm1',
+      role: 'assistant',
+      content: 'answer',
+      metadata: {
+        status: 'completed',
+        query_result_id: 'qr1',
+      },
+      created_at: '2026-05-12T00:00:00Z',
+    })
+
+    const completed = applyStreamEventToMessage(
+      { ...restored, queryResultId: undefined, status: 'streaming' },
+      { type: 'done', state: { generated_sql: 'select 1', query_result_id: 'qr2' } },
+      '3-0'
+    )
+
+    expect(restored.queryResultId).toBe('qr1')
+    expect(completed.queryResultId).toBe('qr2')
+  })
 })

@@ -7,6 +7,8 @@ import {
   Modal, CustomSelect, SelectOption,
   inputStyle, primaryBtnStyle, secondaryBtnStyle, dangerBtnStyle, labelStyle,
 } from './shared'
+import { CloseIcon } from '../Icons'
+import { Tooltip } from '../ui/Tooltip'
 
 const keyOf = (t: { schema: string; name: string }) => `${t.schema}.${t.name}`
 const MAX_NEW_TABLE_UPLOAD_FILES = 20
@@ -408,7 +410,7 @@ function UploadModal({
   }
 
   return (
-    <Modal title="上传数据文件" onClose={onClose} maxWidth={760}>
+    <Modal title="上传数据文件" onClose={onClose} maxWidth={760} closeOnBackdropClick={false}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {/* 分组（必选） */}
         <div>
@@ -494,69 +496,92 @@ function UploadModal({
                         style={{ accentColor: colors.accent }}
                       />
                       <div style={{ minWidth: 0 }}>
-                        <div title={table.display_name || table.comment || table.name} style={{
-                          fontSize: 13,
-                          fontWeight: 500,
-                          color: colors.textPrimary,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {table.display_name || table.comment || table.name}
-                        </div>
-                        <div title={table.name} style={{
-                          marginTop: 2,
-                          fontSize: 12,
-                          color: colors.textSecondary,
-                          fontFamily: 'monospace',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {table.name}
-                        </div>
+                        <Tooltip content={table.display_name || table.comment || table.name}>
+                          <div style={{
+                            fontSize: 13,
+                            fontWeight: 500,
+                            color: colors.textPrimary,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {table.display_name || table.comment || table.name}
+                          </div>
+                        </Tooltip>
+                        <Tooltip content={table.name}>
+                          <div style={{
+                            marginTop: 2,
+                            fontSize: 12,
+                            color: colors.textSecondary,
+                            fontFamily: 'monospace',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {table.name}
+                          </div>
+                        </Tooltip>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, minWidth: 0 }}>
                         {selected ? (
                           <>
-                            <label style={{
-                              ...secondaryBtnStyle,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: 30,
-                              padding: '0 10px',
-                              fontSize: 12,
-                              whiteSpace: 'nowrap',
-                              cursor: 'pointer',
-                            }}>
-                              选择文件
-                              <input
-                                type="file"
-                                accept=".xlsx,.xls,.csv"
-                                style={{ display: 'none' }}
-                                onChange={(e) => setUpdateTableFile(tableId, e.target.files)}
-                              />
-                            </label>
-                            <span title={selectedFile?.name || '未选择文件'} style={{
-                              minWidth: 0,
-                              flex: '1 1 auto',
-                              fontSize: 12,
-                              color: selectedFile ? colors.textPrimary : colors.textSecondary,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}>
-                              {selectedFile?.name || '未选择文件'}
-                            </span>
-                            {selectedFile && table.id && (
-                              <button
-                                type="button"
-                                onClick={() => clearUpdateTableFile(table.id!)}
-                                style={{ ...secondaryBtnStyle, height: 30, padding: '0 8px', fontSize: 12 }}
-                              >
-                                清除
-                              </button>
+                            {selectedFile ? (
+                              <>
+                                <Tooltip content={selectedFile.name}>
+                                  <span style={{
+                                    minWidth: 0,
+                                    flex: '1 1 auto',
+                                    fontSize: 12,
+                                    color: colors.textPrimary,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}>
+                                    {selectedFile.name}
+                                  </span>
+                                </Tooltip>
+                                {table.id && (
+                                  <Tooltip content="清除已选择文件">
+                                  <button
+                                    type="button"
+                                    aria-label="清除已选择文件"
+                                    onClick={() => clearUpdateTableFile(table.id!)}
+                                    style={{
+                                      ...secondaryBtnStyle,
+                                      width: 28,
+                                      minWidth: 28,
+                                      height: 28,
+                                      padding: 0,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                    }}
+                                  >
+                                    <CloseIcon width={13} height={13} color={colors.textSecondary} />
+                                  </button>
+                                  </Tooltip>
+                                )}
+                              </>
+                            ) : (
+                              <label style={{
+                                ...secondaryBtnStyle,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                height: 30,
+                                padding: '0 10px',
+                                fontSize: 12,
+                                whiteSpace: 'nowrap',
+                                cursor: 'pointer',
+                              }}>
+                                选择文件
+                                <input
+                                  type="file"
+                                  accept=".xlsx,.xls,.csv"
+                                  style={{ display: 'none' }}
+                                  onChange={(e) => setUpdateTableFile(tableId, e.target.files)}
+                                />
+                              </label>
                             )}
                           </>
                         ) : (
@@ -713,11 +738,16 @@ function FieldDetailModal({
             const displayColumnName = c.original_name || c.name
             return (
             <tr key={c.name} style={{ borderBottom: `1px solid ${colors.border}` }}>
-              <td
-                title={c.original_name && c.original_name !== c.name ? `原始列名：${c.original_name}\n数据库列名：${c.name}` : c.name}
-                style={{ padding: '6px 10px', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              >
-                {displayColumnName}
+              <td style={{ padding: '6px 10px', fontFamily: 'monospace' }}>
+                <Tooltip content={
+                  c.original_name && c.original_name !== c.name
+                    ? <>{`原始列名：${c.original_name}`}<br />{`数据库列名：${c.name}`}</>
+                    : c.name
+                }>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {displayColumnName}
+                  </div>
+                </Tooltip>
               </td>
               <td style={{ padding: '6px 10px' }}>
                 {editingColId === c.id ? (
@@ -980,8 +1010,8 @@ function GroupManageModal({
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button onClick={() => openConfigure(g)} style={{ ...secondaryBtnStyle, ...groupActionButtonStyle }}>配置表</button>
                     <button onClick={() => openEdit(g)} style={{ ...secondaryBtnStyle, ...groupActionButtonStyle }}>编辑</button>
+                    <Tooltip content={deleteBlocked ? `该分组正被 ${g.role_count} 个角色引用，请先到「角色权限」取消引用` : '删除分组'}>
                     <span
-                      title={deleteBlocked ? `该分组正被 ${g.role_count} 个角色引用，请先到「角色权限」取消引用` : '删除分组'}
                       style={groupActionSlotStyle}
                     >
                       <button
@@ -999,6 +1029,7 @@ function GroupManageModal({
                         {deleteBlocked ? '先解绑' : '删除'}
                       </button>
                     </span>
+                    </Tooltip>
                   </div>
                 </td>
               </tr>

@@ -2,7 +2,7 @@
 
 export const colors = {
   pageBg: '#ffffff',
-  inputBg: '#ffffff',
+  inputBg: '#f4f4f4',
   sidebarBg: '#f6f5f4',
   rightPanelBg: '#ffffff',
   textPrimary: 'rgba(0,0,0,0.95)',
