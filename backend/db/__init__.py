@@ -3,7 +3,7 @@
 包含 PostgreSQL 连接管理和元数据提取功能
 """
 
-from .connection import get_engine, get_connection
+from .connection import dispose_engine, get_engine, get_connection
 from .metadata import (
     ColumnMetadata,
     TableMetadata,
@@ -14,6 +14,7 @@ from .metadata import (
 __all__ = [
     "get_engine",
     "get_connection",
+    "dispose_engine",
     "ColumnMetadata",
     "TableMetadata",
     "get_all_tables_metadata",

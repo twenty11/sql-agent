@@ -28,12 +28,18 @@ from services.query_runs import (
     HEARTBEAT_INTERVAL_SECONDS,
     PARTIAL_FLUSH_CHARS,
     PARTIAL_FLUSH_SECONDS,
+    QUERY_CAPACITY_DUPLICATE,
+    QUERY_CAPACITY_OK,
     TERMINAL_EVENT_TYPES,
     append_event,
+    acquire_query_capacity,
     create_run,
+    delete_run,
     get_run,
     is_cancel_requested_sync,
+    release_query_capacity,
     request_cancel,
+    set_run_message_id,
     stream_events,
     touch_heartbeat,
 )
@@ -92,9 +98,9 @@ def _sse_event(payload: dict, event_id: str | None = None) -> str:
     return f"data: {data}\n\n"
 
 
-def _single_error_stream(message: str) -> StreamingResponse:
+def _single_error_stream(message: str, **extra: object) -> StreamingResponse:
     async def generate():
-        yield _sse_event({"type": "error", "content": message})
+        yield _sse_event({"type": "error", "content": message, **extra})
 
     return StreamingResponse(
         generate(),
@@ -367,10 +373,33 @@ async def query_stream(
         except Exception as exc:
             print(f"[query] all-group table filter failed: error={exc}")
 
+    capacity_status = await acquire_query_capacity(redis, run_id, user.user_id)
+    if capacity_status == QUERY_CAPACITY_DUPLICATE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run already exists")
+    if capacity_status != QUERY_CAPACITY_OK:
+        return _single_error_stream(
+            "当前查询人数较多，请稍后重试。",
+            code="query_concurrency_limit",
+            retry_after_seconds=5,
+        )
+
     started_at = datetime.now(timezone.utc).isoformat()
     assistant_msg_id = None
+    run_created = False
     try:
         from db.crud.messages import save_assistant_message_sync, save_user_message_sync
+
+        created_run = await create_run(
+            redis,
+            run_id=run_id,
+            user_id=user.user_id,
+            session_id=session_id,
+            message_id=None,
+        )
+        if not created_run:
+            await release_query_capacity(redis, run_id, user.user_id)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run already exists")
+        run_created = True
 
         await asyncio.to_thread(save_user_message_sync, session_id, question)
         assistant_msg_id = await asyncio.to_thread(
@@ -385,16 +414,15 @@ async def query_stream(
                 "last_heartbeat": started_at,
             },
         )
-        await create_run(
-            redis,
-            run_id=run_id,
-            user_id=user.user_id,
-            session_id=session_id,
-            message_id=assistant_msg_id,
-        )
+        await set_run_message_id(redis, run_id, assistant_msg_id)
+    except HTTPException:
+        raise
     except Exception as exc:
         import traceback
 
+        await release_query_capacity(redis, run_id, user.user_id)
+        if run_created:
+            await delete_run(redis, run_id)
         print(f"[messages] initialize failed: session_id={session_id}, error={exc}")
         print(f"[messages] traceback: {traceback.format_exc()}")
         return _single_error_stream("Query initialization failed.")
@@ -623,6 +651,10 @@ async def query_stream(
                     pass
 
             _RUN_CONTROLS.pop(run_id, None)
+            try:
+                await release_query_capacity(redis, run_id, user.user_id)
+            except Exception:
+                pass
 
     task = asyncio.create_task(run_workflow_and_persist())
     _BACKGROUND_TASKS.add(task)

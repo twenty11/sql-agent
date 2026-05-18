@@ -58,12 +58,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # 应用退出时释放 Redis / 异步数据库连接池
+        # 应用退出时释放 Redis / 数据库连接池
         try:
             from auth.dependencies import close_redis
             await close_redis()
         except Exception as e:
             print(f"[lifespan] 关闭 Redis 失败: {e}")
+        try:
+            from db.connection import dispose_engine
+            dispose_engine()
+        except Exception as e:
+            print(f"[lifespan] 释放同步数据库引擎失败: {e}")
         try:
             from db.async_connection import get_async_engine
             await get_async_engine().dispose()

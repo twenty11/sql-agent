@@ -14,6 +14,7 @@ backend/logs/
 upload_staging/
 backend/upload_staging/
 backend/graph_.png
+docker-images/
 
 # Local environment
 .env

@@ -37,18 +37,25 @@ async def _write_log(
     execution_success, execution_time_ms, row_count, error_message,
 ):
     ensure_backend_root_on_path()
-    from db.async_connection import AsyncSessionLocal
+    from db.async_connection import AsyncSessionLocal, get_async_engine
     from db.crud.audit import write_audit_log
 
-    async with AsyncSessionLocal() as db:
-        await write_audit_log(
-            db,
-            user_id=user_id,
-            session_id=session_id,
-            question=question,
-            generated_sql=generated_sql,
-            execution_success=execution_success,
-            execution_time_ms=execution_time_ms,
-            row_count=row_count,
-            error_message=error_message,
-        )
+    try:
+        async with AsyncSessionLocal() as db:
+            await write_audit_log(
+                db,
+                user_id=user_id,
+                session_id=session_id,
+                question=question,
+                generated_sql=generated_sql,
+                execution_success=execution_success,
+                execution_time_ms=execution_time_ms,
+                row_count=row_count,
+                error_message=error_message,
+            )
+    finally:
+        # Celery calls this coroutine through asyncio.run(), which creates and
+        # closes a new event loop per task invocation. asyncpg connections in
+        # SQLAlchemy's pool are bound to the loop they were created on, so close
+        # pooled connections before that loop goes away.
+        await get_async_engine().dispose()

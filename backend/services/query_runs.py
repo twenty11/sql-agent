@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
@@ -25,9 +26,48 @@ PARTIAL_FLUSH_SECONDS = 2
 PARTIAL_FLUSH_CHARS = 500
 TERMINAL_STATUSES = {"completed", "failed", "stopped"}
 TERMINAL_EVENT_TYPES = {"done", "error", "stopped"}
+QUERY_CAPACITY_OK = "ok"
+QUERY_CAPACITY_GLOBAL_LIMIT = "global_limit"
+QUERY_CAPACITY_USER_LIMIT = "user_limit"
+QUERY_CAPACITY_DUPLICATE = "duplicate"
 
 _sync_redis_client: sync_redis.Redis | None = None
 _sync_redis_lock = threading.Lock()
+
+_CAPACITY_ACQUIRE_SCRIPT = """
+local global_key = KEYS[1]
+local user_key = KEYS[2]
+local now_ms = tonumber(ARGV[1])
+local ttl_ms = tonumber(ARGV[2])
+local run_id = ARGV[3]
+local global_limit = tonumber(ARGV[4])
+local user_limit = tonumber(ARGV[5])
+local expire_seconds = tonumber(ARGV[6])
+
+redis.call("ZREMRANGEBYSCORE", global_key, "-inf", now_ms)
+redis.call("ZREMRANGEBYSCORE", user_key, "-inf", now_ms)
+
+if redis.call("ZSCORE", global_key, run_id) or redis.call("ZSCORE", user_key, run_id) then
+    return -2
+end
+if global_limit > 0 and redis.call("ZCARD", global_key) >= global_limit then
+    return 0
+end
+if user_limit > 0 and redis.call("ZCARD", user_key) >= user_limit then
+    return -1
+end
+
+local expires_at = now_ms + ttl_ms
+if global_limit > 0 then
+    redis.call("ZADD", global_key, expires_at, run_id)
+    redis.call("EXPIRE", global_key, expire_seconds)
+end
+if user_limit > 0 then
+    redis.call("ZADD", user_key, expires_at, run_id)
+    redis.call("EXPIRE", user_key, expire_seconds)
+end
+return 1
+"""
 
 
 def utc_now() -> datetime:
@@ -58,6 +98,22 @@ def run_key(run_id: str) -> str:
 
 def events_key(run_id: str) -> str:
     return f"query:run:{run_id}:events"
+
+
+def run_claim_key(run_id: str) -> str:
+    return f"query:run:{run_id}:claim"
+
+
+def query_capacity_global_key() -> str:
+    return "query:capacity:global"
+
+
+def query_capacity_user_key(user_id: str) -> str:
+    return f"query:capacity:user:{user_id}"
+
+
+def _unix_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def terminal_status_for_event(payload: dict[str, Any]) -> str | None:
@@ -92,14 +148,14 @@ async def create_run(
     run_id: str,
     user_id: str,
     session_id: str,
-    message_id: str,
-) -> dict[str, str]:
+    message_id: str | None,
+) -> dict[str, str] | None:
     now = iso_now()
     data = {
         "run_id": run_id,
         "user_id": user_id,
         "session_id": session_id,
-        "message_id": message_id,
+        "message_id": message_id or "",
         "status": "streaming",
         "started_at": now,
         "last_heartbeat": now,
@@ -107,9 +163,28 @@ async def create_run(
         "last_event_id": "0-0",
         "cancel_requested": "0",
     }
-    await redis.hset(run_key(run_id), mapping=data)
-    await redis.expire(run_key(run_id), RUN_TTL_SECONDS)
+    claim_created = await redis.set(run_claim_key(run_id), "1", ex=RUN_TTL_SECONDS, nx=True)
+    if not claim_created:
+        return None
+    try:
+        if await redis.exists(run_key(run_id)):
+            await redis.delete(run_claim_key(run_id))
+            return None
+        await redis.hset(run_key(run_id), mapping=data)
+        await redis.expire(run_key(run_id), RUN_TTL_SECONDS)
+    except Exception:
+        await redis.delete(run_claim_key(run_id))
+        raise
     return data
+
+
+async def set_run_message_id(redis: aioredis.Redis, run_id: str, message_id: str) -> None:
+    await redis.hset(run_key(run_id), mapping={"message_id": message_id})
+    await redis.expire(run_key(run_id), RUN_TTL_SECONDS)
+
+
+async def delete_run(redis: aioredis.Redis, run_id: str) -> None:
+    await redis.delete(run_key(run_id), run_claim_key(run_id), events_key(run_id))
 
 
 async def get_run(redis: aioredis.Redis, run_id: str) -> dict[str, str] | None:
@@ -117,10 +192,107 @@ async def get_run(redis: aioredis.Redis, run_id: str) -> dict[str, str] | None:
     return data or None
 
 
+def _capacity_settings(
+    global_limit: int | None = None,
+    user_limit: int | None = None,
+    lease_ttl_seconds: int | None = None,
+) -> tuple[int, int, int]:
+    settings = get_settings()
+    resolved_global = settings.query_max_concurrent_global if global_limit is None else global_limit
+    resolved_user = settings.query_max_concurrent_per_user if user_limit is None else user_limit
+    resolved_ttl = (
+        settings.query_capacity_lease_ttl_seconds
+        if lease_ttl_seconds is None
+        else lease_ttl_seconds
+    )
+    return int(resolved_global), int(resolved_user), max(1, int(resolved_ttl))
+
+
+async def acquire_query_capacity(
+    redis: aioredis.Redis,
+    run_id: str,
+    user_id: str,
+    *,
+    global_limit: int | None = None,
+    user_limit: int | None = None,
+    lease_ttl_seconds: int | None = None,
+) -> str:
+    """Try to reserve one distributed query slot for a run."""
+    resolved_global, resolved_user, resolved_ttl = _capacity_settings(
+        global_limit, user_limit, lease_ttl_seconds
+    )
+    if resolved_global <= 0 and resolved_user <= 0:
+        return QUERY_CAPACITY_OK
+
+    now_ms = _unix_ms()
+    ttl_ms = resolved_ttl * 1000
+    expire_seconds = max(resolved_ttl * 2, resolved_ttl + 1)
+    result = await redis.eval(
+        _CAPACITY_ACQUIRE_SCRIPT,
+        2,
+        query_capacity_global_key(),
+        query_capacity_user_key(user_id),
+        str(now_ms),
+        str(ttl_ms),
+        run_id,
+        str(resolved_global),
+        str(resolved_user),
+        str(expire_seconds),
+    )
+    code = int(result)
+    if code == 1:
+        return QUERY_CAPACITY_OK
+    if code == 0:
+        return QUERY_CAPACITY_GLOBAL_LIMIT
+    if code == -1:
+        return QUERY_CAPACITY_USER_LIMIT
+    return QUERY_CAPACITY_DUPLICATE
+
+
+async def refresh_query_capacity(
+    redis: aioredis.Redis,
+    run_id: str,
+    user_id: str,
+    *,
+    global_limit: int | None = None,
+    user_limit: int | None = None,
+    lease_ttl_seconds: int | None = None,
+) -> None:
+    resolved_global, resolved_user, resolved_ttl = _capacity_settings(
+        global_limit, user_limit, lease_ttl_seconds
+    )
+    if resolved_global <= 0 and resolved_user <= 0:
+        return
+
+    now_ms = _unix_ms()
+    expires_at = now_ms + resolved_ttl * 1000
+    expire_seconds = max(resolved_ttl * 2, resolved_ttl + 1)
+    global_key = query_capacity_global_key()
+    user_key = query_capacity_user_key(user_id)
+
+    await redis.zremrangebyscore(global_key, "-inf", now_ms)
+    await redis.zremrangebyscore(user_key, "-inf", now_ms)
+    if resolved_global > 0 and await redis.zscore(global_key, run_id) is not None:
+        await redis.zadd(global_key, {run_id: expires_at})
+        await redis.expire(global_key, expire_seconds)
+    if resolved_user > 0 and await redis.zscore(user_key, run_id) is not None:
+        await redis.zadd(user_key, {run_id: expires_at})
+        await redis.expire(user_key, expire_seconds)
+
+
+async def release_query_capacity(redis: aioredis.Redis, run_id: str, user_id: str | None = None) -> None:
+    await redis.zrem(query_capacity_global_key(), run_id)
+    if user_id:
+        await redis.zrem(query_capacity_user_key(user_id), run_id)
+
+
 async def touch_heartbeat(redis: aioredis.Redis, run_id: str) -> None:
     now = iso_now()
     await redis.hset(run_key(run_id), mapping={"last_heartbeat": now})
     await redis.expire(run_key(run_id), RUN_TTL_SECONDS)
+    user_id = await redis.hget(run_key(run_id), "user_id")
+    if user_id:
+        await refresh_query_capacity(redis, run_id, user_id)
 
 
 async def append_event(
@@ -147,6 +319,11 @@ async def append_event(
     await redis.hset(run_key(run_id), mapping=patch)
     await redis.expire(run_key(run_id), RUN_TTL_SECONDS)
     await redis.expire(events_key(run_id), STREAM_TTL_SECONDS)
+    if terminal_status:
+        try:
+            await release_query_capacity(redis, run_id, await redis.hget(run_key(run_id), "user_id"))
+        except Exception:
+            pass
     return event_id
 
 

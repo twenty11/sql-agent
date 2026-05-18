@@ -1,0 +1,254 @@
+name: sql-agent-prod
+
+x-backend-environment: &backend-environment
+  PG_HOST: ${PG_HOST:-postgres}
+  PG_PORT: ${PG_PORT:-5432}
+  PG_DATABASE: ${PG_DATABASE:-sql_agent_db}
+  PG_USER: ${PG_USER:-sql_agent}
+  PG_PASSWORD: ${PG_PASSWORD:-change-me}
+  PG_SCHEMA: ${PG_SCHEMA:-sql_agent}
+  PG_PUBLIC_SCHEMA: ${PG_PUBLIC_SCHEMA:-public}
+
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+  MILVUS_HOST: ${MILVUS_HOST:-milvus-standalone}
+  MILVUS_PORT: ${MILVUS_PORT:-19530}
+  MILVUS_USER: ${MILVUS_USER:-root}
+  MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
+  MILVUS_ALIAS: ${MILVUS_ALIAS:-default}
+
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:8000/v1}
+  LLM_MODEL_NAME: ${LLM_MODEL_NAME:-your-model-name}
+  LLM_API_KEY: ${LLM_API_KEY:-not-needed}
+
+  EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
+  UPLOAD_STAGING_DIR: /app/upload_staging
+
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-in-production}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+  REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+
+  AUTO_SYNC_ON_STARTUP: ${AUTO_SYNC_ON_STARTUP:-false}
+  RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
+  MAX_RETRY_COUNT: ${MAX_RETRY_COUNT:-3}
+  MAX_HISTORY_TURNS: ${MAX_HISTORY_TURNS:-5}
+  SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
+
+  QUERY_PREVIEW_MAX_ROWS: ${QUERY_PREVIEW_MAX_ROWS:-1000}
+  QUERY_STATEMENT_TIMEOUT_MS: ${QUERY_STATEMENT_TIMEOUT_MS:-60000}
+  QUERY_MAX_CONCURRENT_GLOBAL: ${QUERY_MAX_CONCURRENT_GLOBAL:-4}
+  QUERY_MAX_CONCURRENT_PER_USER: ${QUERY_MAX_CONCURRENT_PER_USER:-1}
+  QUERY_CAPACITY_LEASE_TTL_SECONDS: ${QUERY_CAPACITY_LEASE_TTL_SECONDS:-120}
+  EXPORT_STATEMENT_TIMEOUT_MS: ${EXPORT_STATEMENT_TIMEOUT_MS:-300000}
+  EXPORT_CHUNK_SIZE: ${EXPORT_CHUNK_SIZE:-2000}
+  EXPORT_MAX_ROWS: ${EXPORT_MAX_ROWS:-1048575}
+
+  LOG_ENABLED: ${LOG_ENABLED:-true}
+  LOG_DIR: /app/logs
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5242880}
+  LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-5}
+
+  LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+  LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-sql-agent}
+  LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  environment:
+    <<: *backend-environment
+  volumes:
+    - upload-staging:/app/upload_staging
+    - backend-logs:/app/logs
+    - ${EMBEDDING_MODEL_HOST_PATH:-./models/bge-small-zh-v1.5}:${EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - sql-agent
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - sql-agent
+    restart: unless-stopped
+
+  backend:
+    <<: *backend-common
+    command:
+      - uvicorn
+      - server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --workers
+      - "${UVICORN_WORKERS:-1}"
+      - --timeout-keep-alive
+      - "120"
+      - --limit-concurrency
+      - "${UVICORN_LIMIT_CONCURRENCY:-10}"
+      - --limit-max-requests
+      - "1000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus-standalone:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  worker:
+    <<: *backend-common
+    command:
+      - celery
+      - -A
+      - tasks:celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=${CELERY_CONCURRENCY:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus-standalone:
+        condition: service_started
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend-common
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - tools
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-sql_agent_db}
+      POSTGRES_USER: ${PG_USER:-sql_agent}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - sql-agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - sql-agent
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    command:
+      - etcd
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    networks:
+      - sql-agent
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/minio_data
+    networks:
+      - sql-agent
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  milvus-standalone:
+    image: milvusdb/milvus:v2.4.15
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - sql-agent
+    restart: unless-stopped
+
+networks:
+  sql-agent:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  etcd-data:
+  minio-data:
+  milvus-data:
+  upload-staging:
+  backend-logs:
