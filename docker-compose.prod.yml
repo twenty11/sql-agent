@@ -1,50 +1,37 @@
+# ==================== 项目名称 ====================
 name: sql-agent-prod
 
+# ==================== 后端公共环境变量 ====================
+# 这里集中管理所有后端服务的环境变量，修改一处全部生效
 x-backend-environment: &backend-environment
-  PG_HOST: ${PG_HOST:-postgres}
+  PG_HOST: ${PG_HOST:-sqlagent-postgres}
   PG_PORT: ${PG_PORT:-5432}
-  PG_DATABASE: ${PG_DATABASE:-sql_agent_db}
-  PG_USER: ${PG_USER:-sql_agent}
-  PG_PASSWORD: ${PG_PASSWORD:-change-me}
+  PG_DATABASE: ${PG_DATABASE:-sql_agent}
+  PG_USER: ${PG_USER:-postgres}
+  PG_PASSWORD: ${PG_PASSWORD:-ChangeThisToStrongPassword123!}
   PG_SCHEMA: ${PG_SCHEMA:-sql_agent}
   PG_PUBLIC_SCHEMA: ${PG_PUBLIC_SCHEMA:-public}
 
-  REDIS_URL: redis://redis:6379/0
-  CELERY_BROKER_URL: redis://redis:6379/1
-  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  REDIS_URL: redis://sqlagent-redis:6379/0
+  CELERY_BROKER_URL: redis://sqlagent-redis:6379/0
+  CELERY_RESULT_BACKEND: redis://sqlagent-redis:6379/1
 
-  MILVUS_HOST: ${MILVUS_HOST:-milvus-standalone}
+  MILVUS_HOST: ${MILVUS_HOST:-sqlagent-milvus}
   MILVUS_PORT: ${MILVUS_PORT:-19530}
-  MILVUS_USER: ${MILVUS_USER:-root}
-  MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
-  MILVUS_ALIAS: ${MILVUS_ALIAS:-default}
 
-  LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:8000/v1}
-  LLM_MODEL_NAME: ${LLM_MODEL_NAME:-your-model-name}
-  LLM_API_KEY: ${LLM_API_KEY:-not-needed}
+  LLM_BASE_URL: ${LLM_BASE_URL}
+  LLM_MODEL_NAME: ${LLM_MODEL_NAME}
+  LLM_API_KEY: ${LLM_API_KEY}
 
   EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
   UPLOAD_STAGING_DIR: /app/upload_staging
 
-  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-in-production}
-  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
-  REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
-
-  AUTO_SYNC_ON_STARTUP: ${AUTO_SYNC_ON_STARTUP:-false}
   RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
   MAX_RETRY_COUNT: ${MAX_RETRY_COUNT:-3}
-  MAX_HISTORY_TURNS: ${MAX_HISTORY_TURNS:-5}
-  SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
+  AUTO_SYNC_ON_STARTUP: ${AUTO_SYNC_ON_STARTUP:-false}
 
-  QUERY_PREVIEW_MAX_ROWS: ${QUERY_PREVIEW_MAX_ROWS:-1000}
-  QUERY_STATEMENT_TIMEOUT_MS: ${QUERY_STATEMENT_TIMEOUT_MS:-60000}
-  QUERY_MAX_CONCURRENT_GLOBAL: ${QUERY_MAX_CONCURRENT_GLOBAL:-4}
-  QUERY_MAX_CONCURRENT_PER_USER: ${QUERY_MAX_CONCURRENT_PER_USER:-1}
-  QUERY_CAPACITY_LEASE_TTL_SECONDS: ${QUERY_CAPACITY_LEASE_TTL_SECONDS:-120}
-  EXPORT_STATEMENT_TIMEOUT_MS: ${EXPORT_STATEMENT_TIMEOUT_MS:-300000}
-  EXPORT_CHUNK_SIZE: ${EXPORT_CHUNK_SIZE:-2000}
-  EXPORT_MAX_ROWS: ${EXPORT_MAX_ROWS:-1048575}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-ChangeThisToVeryLongSecretInProduction!}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
 
   LOG_ENABLED: ${LOG_ENABLED:-true}
   LOG_DIR: /app/logs
@@ -54,61 +41,54 @@ x-backend-environment: &backend-environment
 
   LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
   LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
-  LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-sql-agent}
-  LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
 
+
+# ==================== 后端公共配置 ====================
 x-backend-common: &backend-common
   build:
-    context: ./backend
-    dockerfile: Dockerfile
+    context: .
+    dockerfile: backend/Dockerfile
   environment:
     <<: *backend-environment
   volumes:
-    - upload-staging:/app/upload_staging
-    - backend-logs:/app/logs
+    - ./volumes/upload-staging:/app/upload_staging
+    - ./volumes/backend-logs:/app/logs
     - ${EMBEDDING_MODEL_HOST_PATH:-./models/bge-small-zh-v1.5}:${EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}:ro
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
   networks:
     - sql-agent
 
+
+# ==================== 服务定义 ====================
 services:
-  frontend:
+
+  # ==================== Nginx 反向代理（入口）===================
+  sqlagent-nginx:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+    image: sql-agent-frontend:prod
+    container_name: sqlagent-nginx
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_PORT:-3000}:80"          # 浏览器访问地址
     depends_on:
-      backend:
+      sqlagent-backend:
         condition: service_started
     networks:
       - sql-agent
     restart: unless-stopped
 
-  backend:
+  # ==================== 后端主服务 (Gunicorn + Uvicorn) ====================
+  sqlagent-backend:
     <<: *backend-common
-    command:
-      - uvicorn
-      - server:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - --workers
-      - "${UVICORN_WORKERS:-1}"
-      - --timeout-keep-alive
-      - "120"
-      - --limit-concurrency
-      - "${UVICORN_LIMIT_CONCURRENCY:-10}"
-      - --limit-max-requests
-      - "1000"
+    container_name: sqlagent-backend
     depends_on:
-      postgres:
+      sqlagent-postgres:
         condition: service_healthy
-      redis:
+      sqlagent-redis:
         condition: service_healthy
-      milvus-standalone:
+      sqlagent-milvus:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
@@ -118,44 +98,52 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-  worker:
+
+  # ==================== Celery Worker ====================
+  sqlagent-celery-worker:
     <<: *backend-common
+    container_name: sqlagent-celery-worker
     command:
       - celery
       - -A
       - tasks:celery_app
       - worker
       - --loglevel=info
-      - --concurrency=${CELERY_CONCURRENCY:-1}
+      - --pool=solo
+      - --concurrency=${CELERY_CONCURRENCY:-4}
     depends_on:
-      postgres:
+      sqlagent-postgres:
         condition: service_healthy
-      redis:
+      sqlagent-redis:
         condition: service_healthy
-      milvus-standalone:
+      sqlagent-milvus:
         condition: service_started
     restart: unless-stopped
 
-  migrate:
+
+  # ==================== 数据库迁移服务 ====================
+  sqlagent-migrate:
     <<: *backend-common
+    container_name: sqlagent-migrate
     command: ["alembic", "upgrade", "head"]
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
+      sqlagent-postgres:
         condition: service_healthy
     profiles:
       - tools
     restart: "no"
 
-  postgres:
-    image: postgres:16-alpine
+
+  # ==================== PostgreSQL 数据库 ====================
+  sqlagent-postgres:
+    image: postgres:18.1-alpine
+    container_name: sqlagent-postgres
     environment:
-      POSTGRES_DB: ${PG_DATABASE:-sql_agent_db}
-      POSTGRES_USER: ${PG_USER:-sql_agent}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:-change-me}
+      POSTGRES_DB: ${PG_DATABASE:-sql_agent}
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-ChangeThisToStrongPassword123!}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./volumes/postgres:/var/lib/postgresql/data
     networks:
       - sql-agent
     healthcheck:
@@ -165,11 +153,14 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
+
+  # ==================== Redis ====================
+  sqlagent-redis:
+    image: redis:8.6.3-alpine
+    container_name: sqlagent-redis
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis-data:/data
+      - ./volumes/redis:/data
     networks:
       - sql-agent
     healthcheck:
@@ -179,20 +170,21 @@ services:
       retries: 10
     restart: unless-stopped
 
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.18
+
+  # ==================== Milvus 向量数据库 ====================
+  sqlagent-etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    container_name: sqlagent-etcd
     command:
       - etcd
-      - --advertise-client-urls=http://127.0.0.1:2379
+      - --advertise-client-urls=http://sqlagent-etcd:2379
       - --listen-client-urls=http://0.0.0.0:2379
       - --data-dir=/etcd
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
       ETCD_AUTO_COMPACTION_RETENTION: "1000"
-      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
-      ETCD_SNAPSHOT_COUNT: "50000"
     volumes:
-      - etcd-data:/etcd
+      - ./volumes/etcd:/etcd
     networks:
       - sql-agent
     healthcheck:
@@ -202,16 +194,16 @@ services:
       retries: 10
     restart: unless-stopped
 
-  minio:
+
+  sqlagent-minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: sqlagent-minio
     command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     volumes:
-      - minio-data:/minio_data
+      - ./volumes/minio:/minio_data
     networks:
       - sql-agent
     healthcheck:
@@ -221,34 +213,33 @@ services:
       retries: 10
     restart: unless-stopped
 
-  milvus-standalone:
-    image: milvusdb/milvus:v2.4.15
+
+  sqlagent-milvus:
+    image: milvusdb/milvus:v2.6.15
+    container_name: sqlagent-milvus
     command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
     environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      ETCD_ENDPOINTS: sqlagent-etcd:2379
+      MINIO_ADDRESS: sqlagent-minio:9000
+      MQ_TYPE: woodpecker
     volumes:
-      - milvus-data:/var/lib/milvus
+      - ./volumes/milvus:/var/lib/milvus
     depends_on:
-      etcd:
+      sqlagent-etcd:
         condition: service_healthy
-      minio:
+      sqlagent-minio:
         condition: service_healthy
     networks:
       - sql-agent
+    ports:
+      - "19530:19530"
+      - "9091:9091"
     restart: unless-stopped
 
+
+# ==================== 网络 ====================
 networks:
   sql-agent:
     driver: bridge
-
-volumes:
-  postgres-data:
-  redis-data:
-  etcd-data:
-  minio-data:
-  milvus-data:
-  upload-staging:
-  backend-logs:

@@ -19,6 +19,7 @@ docker-images/
 # Local environment
 .env
 backend/.env
+backend/.env*
 
 # Local tool state
 .claude/

@@ -1,36 +1,44 @@
+# ==================== Backend Dockerfile - 生产环境 ====================
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# 环境变量优化
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        curl \
-        libgomp1 \
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    ca-certificates \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# 安装 Python 依赖（先复制 requirements 利用 Docker 缓存）
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY alembic.ini config.py server.py ./
-COPY alembic ./alembic
-COPY api ./api
-COPY auth ./auth
-COPY db ./db
-COPY graph ./graph
-COPY scripts ./scripts
-COPY services ./services
-COPY tasks ./tasks
-COPY utils ./utils
-COPY vectorstore ./vectorstore
+# 复制后端全部代码
+COPY backend/ ./
 
-RUN mkdir -p /app/upload_staging /app/logs
+# 创建必要目录并设置权限
+RUN mkdir -p /app/upload_staging /app/logs \
+    && chmod -R 755 /app/upload_staging /app/logs
 
 EXPOSE 8080
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+# 使用 Gunicorn + Uvicorn 作为生产服务器（更稳定，支持 workers）
+CMD ["gunicorn", \
+     "server:app", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--workers", "4", \
+     "--bind", "0.0.0.0:8080", \
+     "--timeout", "120", \
+     "--keep-alive", "5", \
+     "--max-requests", "1000", \
+     "--max-requests-jitter", "100", \
+     "--log-level", "info"]
