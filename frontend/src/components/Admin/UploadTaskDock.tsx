@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { TablesAPI } from '../../services/admin'
 import { colors, radii, shadows } from '../../styles/tokens'
 import type { UploadBatchDetail, UploadBatchItem, UploadBatchStatus } from '../../types/admin'
@@ -47,6 +47,7 @@ export function UploadTaskDock() {
   const { user, isLoggedIn } = useAuth()
   const isAdmin = isLoggedIn && !!user?.roles.includes('admin')
   const { batches, localSubmissions, refresh, dismissLocalSubmission } = useUploadTasks()
+  const dockRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [details, setDetails] = useState<Record<string, UploadBatchDetail>>({})
@@ -93,10 +94,23 @@ export function UploadTaskDock() {
     return () => window.clearInterval(timer)
   }, [open, expanded, refresh])
 
+  useEffect(() => {
+    if (!open) return
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (dockRef.current && !dockRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick)
+  }, [open])
+
   if (!isAdmin) return null
 
   return (
-    <div style={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1200 }}>
+    <div ref={dockRef} style={{ position: 'fixed', right: 24, bottom: 24, zIndex: 1200 }}>
       {open && (
         <div style={{
           position: 'absolute',

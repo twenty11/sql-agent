@@ -324,6 +324,16 @@ function UploadModal({
     () => groupTables.filter((t) => t.id && selectedTableIds.has(t.id)),
     [groupTables, selectedTableIds],
   )
+  const selectableUpdateTableIds = useMemo(
+    () => groupTables.map((t) => t.id).filter((id): id is string => Boolean(id)),
+    [groupTables],
+  )
+  const bulkUpdateTableIds = useMemo(
+    () => selectableUpdateTableIds.slice(0, MAX_NEW_TABLE_UPLOAD_FILES),
+    [selectableUpdateTableIds],
+  )
+  const allBulkUpdateTablesSelected =
+    bulkUpdateTableIds.length > 0 && bulkUpdateTableIds.every((id) => selectedTableIds.has(id))
 
   const handleModeChange = (nextMode: 'new' | 'update') => {
     setMode(nextMode)
@@ -364,6 +374,34 @@ function UploadModal({
       next.add(tableId)
     }
     setSelectedTableIds(next)
+  }
+
+  const toggleAllUpdateTables = () => {
+    if (allBulkUpdateTablesSelected) {
+      const next = new Set(selectedTableIds)
+      bulkUpdateTableIds.forEach((id) => next.delete(id))
+      setSelectedTableIds(next)
+      setUpdateFiles((prev) => {
+        const copy = { ...prev }
+        bulkUpdateTableIds.forEach((id) => delete copy[id])
+        return copy
+      })
+      return
+    }
+
+    if (selectableUpdateTableIds.length > MAX_NEW_TABLE_UPLOAD_FILES) {
+      alert(`更新已有表一次最多选择 ${MAX_NEW_TABLE_UPLOAD_FILES} 张表，已选择前 ${MAX_NEW_TABLE_UPLOAD_FILES} 张表`)
+    }
+
+    const nextIds = new Set(bulkUpdateTableIds)
+    setSelectedTableIds(nextIds)
+    setUpdateFiles((prev) => {
+      const kept: Record<string, File> = {}
+      bulkUpdateTableIds.forEach((id) => {
+        if (prev[id]) kept[id] = prev[id]
+      })
+      return kept
+    })
   }
 
   const setUpdateTableFile = (tableId: string, selected: FileList | null) => {
@@ -454,10 +492,28 @@ function UploadModal({
         {/* 目标表（更新模式） */}
         {mode === 'update' && (
           <div>
-            <label style={labelStyle}>
-              选择要更新的表 <span style={{ color: '#e57575' }}>*</span>
-              <span style={{ color: colors.textSecondary }}>，每张表绑定 1 个文件</span>
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+              <label style={{ ...labelStyle, marginBottom: 0 }}>
+                选择要更新的表 <span style={{ color: '#e57575' }}>*</span>
+                <span style={{ color: colors.textSecondary }}>，每张表绑定 1 个文件</span>
+              </label>
+              {groupId && groupTables.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleAllUpdateTables}
+                  disabled={bulkUpdateTableIds.length === 0}
+                  style={{
+                    ...secondaryBtnStyle,
+                    padding: '5px 10px',
+                    fontSize: 12,
+                    whiteSpace: 'nowrap',
+                    opacity: bulkUpdateTableIds.length === 0 ? 0.55 : 1,
+                  }}
+                >
+                  {allBulkUpdateTablesSelected ? '取消全选' : '全选'}
+                </button>
+              )}
+            </div>
             {groupTables.length === 0 && groupId && (
               <div style={{ fontSize: 12, color: colors.textSecondary, marginTop: 4 }}>
                 该分组下暂无表，请先建表或切换分组
@@ -479,19 +535,32 @@ function UploadModal({
                   const selected = !!table.id && selectedTableIds.has(table.id)
                   const selectedFile = table.id ? updateFiles[table.id] : undefined
                   return (
-                    <div key={table.name} style={{
-                      display: 'grid',
-                      gridTemplateColumns: '28px minmax(0, 1fr) minmax(180px, 240px)',
-                      gap: 10,
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      borderBottom: `1px solid ${colors.borderLight}`,
-                      background: selected ? colors.accent + '08' : '#fff',
-                    }}>
+                    <div
+                      key={table.name}
+                      role={table.id ? 'button' : undefined}
+                      tabIndex={table.id ? 0 : -1}
+                      onClick={() => table.id && toggleUpdateTable(table.id)}
+                      onKeyDown={(e) => {
+                        if (!table.id || (e.key !== 'Enter' && e.key !== ' ')) return
+                        e.preventDefault()
+                        toggleUpdateTable(table.id)
+                      }}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '28px minmax(0, 1fr) minmax(180px, 240px)',
+                        gap: 10,
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        borderBottom: `1px solid ${colors.borderLight}`,
+                        background: selected ? colors.accent + '08' : '#fff',
+                        cursor: selected ? 'default' : table.id ? 'pointer' : 'not-allowed',
+                      }}
+                    >
                       <input
                         type="checkbox"
                         checked={selected}
                         disabled={!table.id}
+                        onClick={(e) => e.stopPropagation()}
                         onChange={() => table.id && toggleUpdateTable(table.id)}
                         style={{ accentColor: colors.accent }}
                       />
@@ -530,7 +599,8 @@ function UploadModal({
                                 <Tooltip content={selectedFile.name}>
                                   <span style={{
                                     minWidth: 0,
-                                    flex: '1 1 auto',
+                                    flex: '0 1 auto',
+                                    maxWidth: 'calc(100% - 34px)',
                                     fontSize: 12,
                                     color: colors.textPrimary,
                                     overflow: 'hidden',
@@ -545,7 +615,10 @@ function UploadModal({
                                   <button
                                     type="button"
                                     aria-label="清除已选择文件"
-                                    onClick={() => clearUpdateTableFile(table.id!)}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      clearUpdateTableFile(table.id!)
+                                    }}
                                     style={{
                                       ...secondaryBtnStyle,
                                       width: 28,
@@ -573,7 +646,9 @@ function UploadModal({
                                 fontSize: 12,
                                 whiteSpace: 'nowrap',
                                 cursor: 'pointer',
-                              }}>
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              >
                                 选择文件
                                 <input
                                   type="file"

@@ -24,6 +24,7 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 
 # Embeddings
+# torch is installed separately in Dockerfile from the CPU-only PyTorch index.
 sentence-transformers>=2.2.0
 
 # Utilities

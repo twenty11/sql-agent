@@ -138,5 +138,5 @@ if __name__ == "__main__":
         workers=1,
         timeout_keep_alive=120,
         limit_concurrency=10,
-        limit_max_requests=1000,
+        limit_max_requests=1000
     )

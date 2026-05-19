@@ -8,6 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.11.0
+
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -20,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 安装 Python 依赖（先复制 requirements 利用 Docker 缓存）
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --index-url ${PYTORCH_INDEX_URL} torch==${TORCH_VERSION} \
     && pip install --no-cache-dir -r requirements.txt
 
 # 复制后端全部代码

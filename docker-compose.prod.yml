@@ -26,21 +26,11 @@ x-backend-environment: &backend-environment
   EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
   UPLOAD_STAGING_DIR: /app/upload_staging
 
-  RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
-  MAX_RETRY_COUNT: ${MAX_RETRY_COUNT:-3}
-  AUTO_SYNC_ON_STARTUP: ${AUTO_SYNC_ON_STARTUP:-false}
-
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-ChangeThisToVeryLongSecretInProduction!}
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
 
   LOG_ENABLED: ${LOG_ENABLED:-true}
   LOG_DIR: /app/logs
-  LOG_FORMAT: ${LOG_FORMAT:-json}
-  LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5242880}
-  LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-5}
-
-  LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
-  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
 
 
 # ==================== 后端公共配置 ====================
@@ -48,6 +38,7 @@ x-backend-common: &backend-common
   build:
     context: .
     dockerfile: backend/Dockerfile
+  image: haodong/sql-agent-backend:${IMAGE_TAG:-prod}
   environment:
     <<: *backend-environment
   volumes:
@@ -68,7 +59,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
-    image: sql-agent-frontend:prod
+    image: haodong/sql-agent-frontend:${IMAGE_TAG:-prod}
     container_name: sqlagent-nginx
     ports:
       - "${HTTP_PORT:-3000}:80"          # 浏览器访问地址
